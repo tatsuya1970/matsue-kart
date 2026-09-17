@@ -1,0 +1,8 @@
+# robots.txt はドメインの直下 (https://<ドメイン>/robots.txt) にあるものしか読まれない。
+# GitHub Pages のプロジェクトページでは /matsue-kart/robots.txt に置かれるので、
+# このファイルは現状クローラには読まれていない。独自ドメインに移したときに効く。
+# サイトマップは Search Console に直接登録すること。
+User-agent: *
+Allow: /
+
+Sitemap: https://tatsuya1970.github.io/matsue-kart/sitemap.xml

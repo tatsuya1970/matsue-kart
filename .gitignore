@@ -1,0 +1,12 @@
+node_modules
+dist
+data/citygml
+*.log
+data/shots*
+data/dem_probe.txt
+data/lod2tex
+data/dem_grid.bin
+data/dem_grid.bin.key
+data/castle_tex_orig
+data/osm/check_route.json
+data/osm/query.txt

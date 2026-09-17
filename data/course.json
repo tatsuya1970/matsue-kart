@@ -1,0 +1,19 @@
+{
+  "comment": "地点名とラベル。実際の走行線は tools/build_course.mjs が、案内線 (data/drawn_route.json) に沿わせつつ PLATEAU の道路面 (tran) の上を通るよう探索して data/course_path.json に出力する。",
+  "origin": { "lat": 35.4648, "lon": 133.0625 },
+  "roadWidth": 18,
+  "viaductHeight": 13,
+
+  "waypoints": [
+    { "name": "松江駅", "en": "Matsue Sta.",                 "lat": 35.46480, "lon": 133.06250, "label": true },
+    { "name": "くにびき大橋", "en": "Kunibiki Bridge",        "lat": 35.46750, "lon": 133.06520, "label": true },
+    { "name": "島根県庁", "short": "県庁", "en": "Shimane Pref. Office", "lat": 35.47200, "lon": 133.05200, "label": true },
+    { "name": "松江城", "en": "Matsue Castle",               "lat": 35.47440, "lon": 133.05430, "label": true },
+    { "name": "塩見縄手", "en": "Shiomi Nawate",             "lat": 35.47910, "lon": 133.04900, "label": true },
+    { "name": "松江市役所", "short": "市役所", "en": "Matsue City Hall", "lat": 35.46730, "lon": 133.04820, "label": true },
+    { "name": "宍道湖大橋", "en": "Shinjiko Ohashi Bridge",   "lat": 35.46670, "lon": 133.05230, "label": true },
+    { "name": "宍道湖夕日スポット", "short": "夕日スポット", "en": "Lake Shinji Sunset Spot", "lat": 35.45600, "lon": 133.04980, "label": true },
+    { "name": "浜乃木", "en": "Hamanogi",                    "lat": 35.45400, "lon": 133.05150 },
+    { "name": "松江駅南", "en": "Matsue Sta. South",          "lat": 35.46000, "lon": 133.05700 }
+  ]
+}
