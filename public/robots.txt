@@ -1,8 +1,43 @@
-# robots.txt はドメインの直下 (https://<ドメイン>/robots.txt) にあるものしか読まれない。
-# GitHub Pages のプロジェクトページでは /matsue-kart/robots.txt に置かれるので、
-# このファイルは現状クローラには読まれていない。独自ドメインに移したときに効く。
-# サイトマップは Search Console に直接登録すること。
+# matsue.citykart.jp — 全ページ公開。検索エンジンも AI のクローラーも歓迎する。
+# ここに挙げていないボットも User-agent: * の Allow で許可される。
+# 名前を明示しているのは、既定が「許可」でないものがあるため
+# (Google-Extended と Applebot-Extended は明示的な記述しか見ない)。
+
 User-agent: *
+Allow: /
+
+# --- 生成AI・AI検索 ---
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+User-agent: CCBot
 Allow: /
 
 Sitemap: https://matsue.citykart.jp/sitemap.xml

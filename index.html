@@ -45,8 +45,19 @@
     "playMode": ["SinglePlayer", "MultiPlayer"],
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "JPY" },
     "author": { "@type": "Person", "name": "tatsuya-takemura" },
+    "isPartOf": { "@type": "WebSite", "@id": "https://citykart.jp/#website", "name": "シティカート", "url": "https://citykart.jp/" },
     "isBasedOn": "https://www.mlit.go.jp/plateau/",
     "contentLocation": { "@type": "City", "name": "松江市", "address": { "@type": "PostalAddress", "addressCountry": "JP", "addressRegion": "島根県" } }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "シティカート", "item": "https://citykart.jp/" },
+      { "@type": "ListItem", "position": 2, "name": "松江グランプリ Matsue Kart", "item": "https://matsue.citykart.jp/" }
+    ]
   }
   </script>
   <!-- ==== /SEO:ja ==== -->
@@ -89,6 +100,13 @@
     /* 絶対配置だと行数が増えたときに .keys と重なるので通常フローに置く */
     #overlay .credit { margin-top: 22px; font-size: 12px; opacity: .6; max-width: 900px; line-height: 1.7; }
     #overlay .credit a { color: inherit; text-decoration: underline; }
+    #about { margin-top: 26px; max-width: 640px; text-align: left; font-size: 13px; line-height: 1.8; opacity: .72; }
+    #about h3 { font-size: 14px; margin: 14px 0 2px; color: #ffd83d; }
+    #about p { margin: 0; }
+    html[lang="en"] #about .about-ja, html:not([lang="en"]) #about .about-en { display: none; }
+    #overlay .sites { margin-top: 18px; font-size: 12.5px; opacity: .8; }
+    #overlay .sites a { color: #ffd83d; text-decoration: none; border-bottom: 1px solid rgba(255,216,61,.45); }
+    #overlay .sites a:hover { border-bottom-color: #ffd83d; }
     /* ビルドの識別 (古いページが残っていないかを見分ける) */
     #buildInfo { margin-top: 8px; font-size: 11px; opacity: .45; font-variant-numeric: tabular-nums; }
     #progress { width: 360px; height: 8px; background: rgba(255,255,255,.2); border-radius: 4px; margin-top: 18px; overflow: hidden; }
@@ -266,6 +284,29 @@
     </div>
     <div class="keys" data-en-html="↑/W: accelerate　↓/S: brake and reverse　←→/A D: steer<br />Shift/Space: drift (release for a mini-turbo)　Ctrl/Enter: use item　C: camera　M: sound">↑/W: アクセル　↓/S: ブレーキ・バック　←→/A D: ハンドル<br />Shift/Space: ドリフト（離してミニターボ）　Ctrl/Enter: アイテム使用　C: カメラ切替　M: 音</div>
     <div class="keys touchKeys" data-en-html="◀ ▶: steer　D: drift (release for a mini-turbo)　★: use item　▼: brake and reverse<br />The kart accelerates by itself. You can slide your thumb between buttons.">◀ ▶: ハンドル　D: ドリフト（離してミニターボ）　★: アイテム使用　▼: ブレーキ・バック<br />アクセルは自動です。指を置いたまま隣のボタンへ滑らせても効きます</div>
+    <section id="about">
+      <!-- ==== ABOUT:ja ==== -->
+      <div class="about-ja" lang="ja">
+        <h3>松江グランプリ（Matsue Kart）とは</h3>
+        <p>実在の松江市の街並みを走る、無料のブラウザカートレースゲームです。国土交通省の Project PLATEAU（プラトー）が公開している3D都市モデルから、建物・道路・地形を起こしています。インストールや登録は不要で、パソコンでもスマホ（iPhone / Android）でも遊べます。</p>
+        <h3>コース</h3>
+        <p>1周9.6km、2周で勝負します。松江駅をスタートし、くにびき大橋を渡って島根県庁の前を北上。松江城の東から塩見縄手を回り、松江市役所の南を東へ抜けて宍道湖大橋を南へ渡ります。国道9号の湖岸にある宍道湖夕日スポットからは沖の嫁ヶ島が見え、浜乃木を回って松江駅へ戻ります。松江城の天守は PLATEAU の LOD3 モデルがそのまま建っています。踏切では一畑電車に注意してください（接触するとスピンします）。</p>
+        <h3>遊び方</h3>
+        <p>「1人PLAY」ではAIのカートと走ります。「対戦PLAY」はオンライン対戦で、最大8人が同じレースを走れます（空いた枠はAIが走ります）。アイテムとドリフトのミニターボを使って順位を上げてください。</p>
+      </div>
+      <!-- ==== /ABOUT:ja ==== -->
+      <!-- ==== ABOUT:en ==== -->
+      <div class="about-en" lang="en">
+        <h3>What is Matsue Kart?</h3>
+        <p>Matsue Kart (Matsue Grand Prix) is a free kart racing game that runs in your browser and takes you through the real streets of Matsue, Japan. Buildings, roads and terrain come from the 3D city model published by Project PLATEAU, Japan's Ministry of Land, Infrastructure, Transport and Tourism (MLIT). No install or sign-up — it plays on PCs and on phones (iPhone and Android).</p>
+        <h3>The course</h3>
+        <p>9.6 km a lap, two laps a race. You start at Matsue Station, cross the Kunibiki Bridge and run north past the Shimane Prefectural Office. The course rounds Matsue Castle by way of the Shiomi-nawate street, heads east below Matsue City Hall and crosses the Shinjiko Ohashi Bridge. At the Lake Shinji Sunset Spot on Route 9 you can see Yomegashima island offshore, and the road returns through Hamanogi to Matsue Station. The castle keep is PLATEAU's LOD3 model. Watch for Ichibata trains at the level crossing — touch one and you spin out.</p>
+        <h3>How to play</h3>
+        <p>SOLO PLAY races you against AI karts. ONLINE PLAY is online multiplayer for up to 8 players in the same race, with AI filling any empty seats. Use items and drift mini-turbos to move up the order.</p>
+      </div>
+      <!-- ==== /ABOUT:en ==== -->
+    </section>
+    <div class="sites" data-en-html='More cities: <a href="https://hiroshima.citykart.jp/en/">Hiroshima Kart</a> ・ <a href="https://fukuyama.citykart.jp/en/">Fukuyama Kart</a> — all three at <a href="https://citykart.jp/en/">citykart.jp</a>'>ほかの街を走る: <a href="https://hiroshima.citykart.jp/">広島グランプリ</a> ・ <a href="https://fukuyama.citykart.jp/">福山グランプリ</a> — 3作の入口は <a href="https://citykart.jp/">citykart.jp</a></div>
     <div class="credit" data-en-html='3D city model: MLIT Project PLATEAU, "3D City Model (Project PLATEAU) Matsue City (FY2024)", adapted (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>) — Matsue Castle LOD3, buildings LOD2 (aerial-photo textures) and LOD1, roads, terrain<br />Route planning, railway alignments and park outlines: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)<br /><span style="opacity:.7">Not affiliated with Nintendo</span>'>3D都市モデル: 国土交通省 PLATEAU「3D都市モデル（Project PLATEAU）松江市（2024年度）」を加工して作成 (<a href="https://creativecommons.org/licenses/by/4.0/deed.ja" target="_blank" rel="noopener">CC BY 4.0</a>) / 松江城天守 LOD3・建築物 LOD2 (実写テクスチャ)・LOD1・道路・地形を使用<br />ルートの下書き・一畑電車と JR 山陰本線の線形・公園の輪郭: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)<br /><span style="opacity:.7">本作品は任天堂株式会社とは関係がありません</span></div>
     <div id="buildInfo"></div>
   </div>

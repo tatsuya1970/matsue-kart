@@ -124,12 +124,14 @@ DEM は 2 次メッシュ 533310 を 4 分割した 4 ファイル（計 3GB）�
 
 | URL | 言語 | 中身 |
 | --- | --- | --- |
-| `https://tatsuya1970.github.io/matsue-kart/` | 日本語 | `dist/index.html` |
-| `https://tatsuya1970.github.io/matsue-kart/en/` | 英語 | `dist/en/index.html`（中身は同じで head だけ英語） |
+| `https://matsue.citykart.jp/` | 日本語 | `dist/index.html` |
+| `https://matsue.citykart.jp/en/` | 英語 | `dist/en/index.html`（中身は同じで head だけ英語） |
 
 **なぜ URL を分けるのか。** X や Facebook のカードを作るクローラは JavaScript を実行しません。1 つの URL で実行時に英語へ差し替えても、共有カードは日本語のままになります。検索も、1 つの URL に 2 言語が同居していると、どちらの言語のページとして出すか決めきれません。
 
 **英語ページの作り方。** ページを二重管理しないよう、`index.html` は 1 つだけです。head の言語依存部分を `<!-- ==== SEO:ja ==== -->` と `<!-- ==== /SEO:ja ==== -->` で囲んであり、ビルド後に `tools/build_en_page.mjs` がそこを `tools/seo-en.html` の中身へ差し替え、`<html lang>` を `en` にして `dist/en/index.html` として書き出します（`npm run build` に組み込み済み）。**目印のコメントを消さないでください。** 画面の文言は `applyDomLang()` が `/en/` を見て英語にします。
+
+**紹介文（本文）。** 検索の順位に効くのは meta description ではなく本文です。タイトル画面の下に、ゲームの説明・コースの通過地点・遊び方を日本語と英語で置いてあります（`#about`）。クローラは JavaScript を実行しないので、`tools/build_en_page.mjs` が`/en/` 側では日本語を取り除き、`data-en` を持つ要素の文言も静的に英語へ置き換えます。AI の検索に引用されやすいよう、距離・地名・人数などの事実をそのまま書いています。
 
 入れてあるもの。
 
@@ -141,10 +143,13 @@ DEM は 2 次メッシュ 533310 を 4 分割した 4 ファイル（計 3GB）�
 | 構造化データ（schema.org の `VideoGame`） | 同上。JSON-LD |
 | カード画像 1200x630 | `public/ogp.png`（日本語）/ `public/ogp-en.png`（英語） |
 | サイトマップ | `public/sitemap.xml`。2 言語を hreflang で結んである |
+| 紹介文（本文、言語別） | `index.html` の `#about`（ABOUT ブロック） |
+| 構造化データ（`BreadcrumbList`、`isPartOf`） | 入口サイト citykart.jp の一部であることを示す |
+| 相互リンク | `index.html` の `.sites`。ほかの 2 作と citykart.jp へ |
 
 カード画像は `PORT=5182 node tools/make_ogp.mjs` で作り直せます。松江城天守を上空から撮り、HUD を消してタイトル帯を重ねたものです。文字はブラウザに描かせているので日本語のフォントも崩れません。背景を変えたいときは `QUERY` の `photo=緯度,経度,注視高さ,距離,方位角` を差し替えてください。
 
-**robots.txt は現状読まれません。** クローラが読むのはドメイン直下の `/robots.txt` だけで、プロジェクトページでは `/matsue-kart/robots.txt` に置かれるためです。置いてはありますが（独自ドメインに移したときに効きます）、サイトマップは Search Console に直接登録してください。
+**robots.txt と AI のクローラー。** 独自ドメインに移したので `/robots.txt` は読まれます。検索エンジンに加えて、生成AI・AI検索のクローラー (GPTBot、OAI-SearchBot、ClaudeBot、PerplexityBot、Google-Extended、Applebot-Extended、CCBot ほか) も明示的に許可しています。拒否したくなったら `public/robots.txt` のその行を `Disallow: /` に変えてください。サイトマップは Search Console にも登録します (このドメインでの所有権確認が要ります)。
 
 **ドメインを変えるとき。** URL は `index.html` の SEO ブロック、`tools/seo-en.html`、`public/sitemap.xml`、`public/robots.txt` の 4 か所に書いてあります。GitHub Pages で独自ドメインを設定すると `github.io` 側は 301 で転送されるので、リンクの評価は引き継がれます。
 
@@ -261,7 +266,7 @@ npm run dev             # http://localhost:5182/
 
 `main` に push すると GitHub Actions が GitHub Pages へ公開します（`.github/workflows/deploy.yml`）。
 
-公開先: **https://tatsuya1970.github.io/matsue-kart/**
+公開先: **https://matsue.citykart.jp/**
 
 プロジェクトページはサブパス配信なので `base` が要ります。`vite preview` は `command` が `'serve'` 扱いになり、`command === 'build'` で分岐するとビルド成果物を root で配信してしまって検証にならないため、環境変数で渡しています。
 
