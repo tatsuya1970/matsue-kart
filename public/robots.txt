@@ -5,4 +5,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://tatsuya1970.github.io/matsue-kart/sitemap.xml
+Sitemap: https://matsue.citykart.jp/sitemap.xml

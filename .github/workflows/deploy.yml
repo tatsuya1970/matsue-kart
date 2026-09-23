@@ -31,10 +31,9 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - name: Build
+        # 独自ドメイン直下で配信するので base は既定の '/' のまま。
+        # https://<user>.github.io/matsue-kart/ に戻すときは BASE_PATH: /matsue-kart/ を渡す。
         run: npm run build
-        env:
-          # プロジェクトページは https://<user>.github.io/matsue-kart/ で配信される
-          BASE_PATH: /matsue-kart/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
