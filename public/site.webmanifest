@@ -1,0 +1,28 @@
+{
+  "name": "松江グランプリ Matsue Kart",
+  "short_name": "松江グランプリ",
+  "description": "PLATEAU の3D都市モデルで走る、実在の松江の街の無料ブラウザカートレース。",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1a2a",
+  "theme_color": "#0b1a2a",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

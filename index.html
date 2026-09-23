@@ -62,8 +62,13 @@
   </script>
   <!-- ==== /SEO:ja ==== -->
   <meta name="theme-color" content="#0b1a2a" />
-  <!-- チェッカーフラッグ。データ URI なので追加のリクエストが出ない -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230b1a2a'/><g fill='%23fff'><rect x='6' y='6' width='5' height='5'/><rect x='16' y='6' width='5' height='5'/><rect x='11' y='11' width='5' height='5'/><rect x='21' y='11' width='5' height='5'/><rect x='6' y='16' width='5' height='5'/><rect x='16' y='16' width='5' height='5'/><rect x='11' y='21' width='5' height='5'/><rect x='21' y='21' width='5' height='5'/></g></svg>" />
+  <!-- ファビコン。データ URI ではなく実ファイルにしてある (Google の検索結果の
+       ファビコンは、クローラが取りに行ける URL でないと使われない)。
+       絵柄は 4 サイト共通。作り直しは city-kart の scripts/make-icons.mjs。 -->
+  <link rel="icon" href="/favicon.ico" sizes="32x32" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; background: #0b1a2a; font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
     canvas#game { display: block; width: 100vw; height: 100vh; }
