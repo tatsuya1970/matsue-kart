@@ -52,3 +52,18 @@ describe('ランキング (Worker 側)', () => {
     expect(cleanTime('matsue', Infinity)).toBeNull();
   });
 });
+
+describe('使えない名前 (workers/turn/ngwords.js)', () => {
+  it('不適切な言葉を含む名前を弾く (全角・カタカナ・空白・当て字もそろえてから比べる)', async () => {
+    const { isNgName } = await import('../workers/turn/ngwords.js');
+    for (const n of ['死ね', 'シネ', 'セックス', 'ｓｅｘ', 'S E X', 's3x', 'FUCK', 'fuckyou', 'きちがい', 'キチガイ太郎', 'ちんこ', 'ﾁﾝｺ', 'バカ', 'うんこ', 'Hitler']) {
+      expect(isNgName(n), n).toBe(true);
+    }
+  });
+  it('普通の名前は通す (短い語は名前全体が一致したときだけ弾く)', async () => {
+    const { isNgName } = await import('../workers/turn/ngwords.js');
+    for (const n of ['たけむら', 'Takemura', 'grape', 'class', 'バカンス', 'あほうどり', 'しねま', 'Sussex', 'かすてら', 'ごみや', 'しじみ', 'Diego', 'Nazir', 'Mc Kart', '松江太郎', '🏎🏎']) {
+      expect(isNgName(n), n).toBe(false);
+    }
+  });
+});

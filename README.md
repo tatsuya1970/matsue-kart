@@ -302,6 +302,8 @@ npm run dev             # http://localhost:5182/
 
 **ランキング。** ゴールするとリザルト画面に上位 10 件が出て、名前を入れて自分のタイムを登録できます（`src/ranking.ts`）。記録は TURN と同じ Worker（`workers/turn/` の `Leaderboard`）がサイトごとに上位 100 件を保存します。送り先はリポジトリ変数 `RANKING_URL`（ビルド時に `VITE_RANKING_URL`、値は Worker の URL に `/ranking` を付けたもの）で、未設定ならランキングは出ません。タイムはブラウザで計算しているので、改造すれば速いタイムを送れます。Worker はありえない速さ（コースの全長 ÷ 100 m/s より速いもの）を拒否し、回数を制限するだけです。不適切な名前や不正な記録は、管理用の合言葉（`npx wrangler secret put ADMIN_TOKEN` で設定）を付けて消します。
 
+使えない言葉を含む名前は「その名前は使えません」と出して登録させません（`workers/turn/ngwords.js`。ページと Worker が同じ一覧を使います）。全角・カタカナ・空白・よくある当て字はそろえてから比べますが、一覧は完全ではありません。すり抜けたものは下の方法で消してください。
+
 ```sh
 curl -X DELETE -H "Authorization: Bearer <ADMIN_TOKEN>" "https://<Worker の URL>/ranking?site=matsue&id=<記録の id>"
 ```

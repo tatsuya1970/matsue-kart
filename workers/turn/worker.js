@@ -126,6 +126,7 @@ async function dailyStatus(env) {
 }
 
 // ---- ランキング (ゴールタイム) ----
+import { isNgName } from './ngwords.js';
 //
 // サイトごと (matsue / fukuyama / hiroshima) に 1 つの Durable Object (Leaderboard) を持ち、
 // 速い順に RANK_KEEP 件だけ残す。サイトは Origin のホスト名の先頭で決める
@@ -233,6 +234,8 @@ async function handleRanking(request, env, origin, fail) {
   const name = cleanName(body?.name);
   const time = cleanTime(site, body?.time);
   if (!name) return fail(400, 'name required');
+  // 使えない言葉 (ngwords.js)。ページ側も同じ判定で先に止めるが、改造したページからも保存させない
+  if (isNgName(name)) return fail(400, 'ng_name');
   if (time === null) return fail(400, 'time out of range');
   const res = await board(env, site).fetch('https://board/add', { method: 'POST', body: JSON.stringify({ name, time }) });
   return withCors(new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), origin);

@@ -9,6 +9,8 @@
 // デバッグ用の URL (?debug=1, ?steps=, ?ai=1 など) で走ったときは登録させない。
 
 import { t } from './i18n';
+// 使えない言葉の一覧は Worker と同じものを使う (workers/turn/ngwords.js)
+import { isNgName } from '../workers/turn/ngwords.js';
 
 const ENDPOINT: string = import.meta.env.VITE_RANKING_URL ?? '';
 /** リザルト画面に出す件数 */
@@ -39,9 +41,16 @@ export function formatTime(sec: number): string {
   return `${m}:${(sec - m * 60).toFixed(2).padStart(5, '0')}`;
 }
 
+/** Worker が名前を拒否した (使えない言葉) */
+class NgNameError extends Error {}
+
 async function call(init?: RequestInit): Promise<unknown> {
   const res = await fetch(ENDPOINT, { ...init, signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    if (res.status === 400 && body.includes('ng_name')) throw new NgNameError(body);
+    throw new Error(`HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -97,6 +106,8 @@ export function showRanking(opts: { time: number; name: string; canSubmit: boole
     if (sent) return;
     const name = cleanName(input.value);
     if (!name) { input.focus(); return; }
+    // 使えない言葉は送る前に止める (Worker も同じ判定で拒否する)
+    if (isNgName(name)) { msg.textContent = t('rank.ngName'); input.select(); return; }
     sent = true;
     button.disabled = true; input.disabled = true;
     msg.textContent = t('rank.sending');
@@ -106,10 +117,10 @@ export function showRanking(opts: { time: number; name: string; canSubmit: boole
       renderList(r.entries, r.id);
       form.style.display = 'none';
       msg.textContent = r.rank ? t('rank.done', r.rank) : t('rank.doneOut');
-    } catch {
+    } catch (e) {
       sent = false;
       button.disabled = false; input.disabled = false;
-      msg.textContent = t('rank.failed');
+      msg.textContent = e instanceof NgNameError ? t('rank.ngName') : t('rank.failed');
     }
   };
   button.onclick = () => void send();
