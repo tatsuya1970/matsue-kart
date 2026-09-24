@@ -5,7 +5,7 @@ import { Track } from './track';
 import { buildBuildings, type BuildingsData } from './buildings';
 import { Kart, type RacerDef, type ItemType } from './kart';
 import { ItemSystem } from './items';
-import { NetSession, Presence, newOpenCode, normalizeRoomCode, relayStatus, loadTurn, hasTurn, natProbe, inAppBrowser, COUNTDOWN_SEC, type LobbyInfo, type NetEvent, type NatKind, type Pose, type RoomKind } from './net';
+import { NetSession, Presence, turnConfigured, newOpenCode, normalizeRoomCode, relayStatus, loadTurn, hasTurn, turnState, natProbe, inAppBrowser, COUNTDOWN_SEC, type LobbyInfo, type NetEvent, type NatKind, type Pose, type RoomKind } from './net';
 import { Hud, drawCourseMap } from './hud';
 import { InputManager } from './input';
 import { AudioSystem } from './audio';
@@ -15,7 +15,12 @@ import { loadMatsueCastle, buildYomegashima, buildSunsetSpot, landmarkBlocksBuil
 import { loadLod2 } from './lod2';
 import { rng, lerp, clamp, assetUrl, WAYPOINTS, llToXZ } from './geo';
 import { resolveQuality, saveQuality, allPresets, type QualityLevel } from './quality';
-import { t, isJa, setLang, applyDomLang } from './i18n';
+import { t, lang, isJa, setLang, applyDomLang } from './i18n';
+import { fetchJson } from './fetch';
+import { installErrorHandlers, report, reportError, setTelemetryContext } from './telemetry';
+import { storageGet, storageSet } from './storage';
+
+installErrorHandlers();
 
 // 1 周約 9km × 2 周 (広島版は 7.3km × 2 周)
 const LAPS = 2;
@@ -99,25 +104,56 @@ async function main() {
   const dbg = new URLSearchParams(location.search);
   const quality = resolveQuality(dbg);
   console.log(`画質: ${quality.level} (アトラス ${quality.halfAtlas ? '2048' : '4096'}px / 影 ${quality.shadows ? 'on' : 'off'})`);
+  setTelemetryContext({ quality: quality.level, lang });
   setupQualityButtons(quality.level);
   setupLangButton();
   // ビルドの識別。古いページがキャッシュに残っていると新しい側の「対戦待ち」を読めないので、
   // どの版が動いているかを隅に出しておく (vite.config.ts の define)
   const buildInfo = document.getElementById('buildInfo');
   if (buildInfo) buildInfo.textContent = `build ${__BUILD__.commit} (${new Date(__BUILD__.time).toLocaleString()})`;
-  // トップ画面の「対戦待ち」表示。相手とつながるまで 8〜19 秒かかるので、
-  // 読み込みの裏で先に探し始める (?debug=1 はロビーを通らないので入らない)。
-  // TURN の設定 (public/turn.json) があれば先に読む。部屋に入るときに渡す必要があるため
+  // トップ画面の「対戦待ち」表示と対戦は、公開リレー (nostr) を通じて他のプレイヤーの
+  // ブラウザと直接つなぐ。つなぐと IP アドレスが相手・リレーの運営者・STUN / TURN の
+  // サーバーに伝わるので、利用者が許可するまで (「対戦待ちの人を表示する」か対戦PLAY を
+  // 押すまで) presence・リレー・STUN・TURN の資格情報 API のどれにも接続しない。
+  // 許可は覚えておき、次回からは読み込みの裏で先に探し始める (相手とつながるまで
+  // 8〜19 秒かかるため)。?debug=1 はロビーを通らないので入らない。
   let presence: Presence | null = null;
+  // startNet の中でだけ代入するので、null に絞り込まれないよう型を明示する
+  let turnLoad = null as Promise<number> | null;
+  /** TURN の資格情報を取り終えたか。取り終えるまでは turn.json があるかで対戦PLAY の可否を出す */
+  let turnSettled = false;
   /** NAT の種類と TURN の可否 (診断表示用)。調べ終わるまで null */
   let netProbe: { nat: NatKind; relay: boolean } | null = null;
-  if (!dbg.get('debug')) {
-    await Promise.race([loadTurn(), new Promise(r => setTimeout(r, 4000))]);
-    try { presence = new Presence(); } catch (e) { console.warn('対戦待ちの確認に入れませんでした', e); }
-    void natProbe().then(r => { netProbe = r; });
+  const NET_CONSENT_KEY = 'mk.netConsent';
+  let netConsent = storageGet(NET_CONSENT_KEY) === '1';
+  let netReady: Promise<void> | null = null;
+  /** presence に入ったときに表示側が差し込む処理 (表示の準備より先に入ることがあるため) */
+  let onPresenceStart: (() => void) | null = null;
+  /** 接続を始める (何度呼んでも 1 回だけ)。許可を得てから呼ぶ */
+  function startNet(): Promise<void> {
+    if (dbg.get('debug')) return Promise.resolve();
+    return netReady ??= (async () => {
+      // TURN の設定を先に読む。部屋に入るときに渡す必要があるため
+      turnLoad = loadTurn();
+      void turnLoad.then(() => { turnSettled = true; });
+      await Promise.race([turnLoad, new Promise(r => setTimeout(r, 4000))]);
+      try { presence = new Presence(); } catch (e) { console.warn('対戦待ちの確認に入れませんでした', e); }
+      void natProbe().then(r => { netProbe = r; });
+      onPresenceStart?.();
+    })();
   }
+  /** 通信を許可して接続を始める (ボタンを押したとき) */
+  function grantNet(): Promise<void> {
+    netConsent = true;
+    storageSet(NET_CONSENT_KEY, '1');
+    return startNet();
+  }
+  // 対戦PLAY を出せるか (TURN があるか) は、許可の前でも同じサイトの turn.json だけで見当がつく
+  const turnListed = dbg.get('debug') ? false : await turnConfigured();
+  if (netConsent) await startNet();
   // 低画質では MSAA も切る (内蔵 GPU では帯域を食う)
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.level !== 'low', powerPreference: 'high-performance' });
+  watchContextLoss(canvas);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = quality.shadows && !dbg.get('noshadow');
@@ -174,8 +210,8 @@ async function main() {
   const terrain: Terrain = await loadTerrain(p => setProgress(0.05 + p * 0.15));
   setProgress(0.2, t('load.buildings'));
   const [bData, rData] = await Promise.all([
-    (await fetch(assetUrl('data/buildings.json'))).json() as Promise<BuildingsData>,
-    (await fetch(assetUrl('data/roads.json'))).json() as Promise<{ items: number[][] }>,
+    fetchJson<BuildingsData>(assetUrl('data/buildings.json')),
+    fetchJson<{ items: number[][] }>(assetUrl('data/roads.json')),
   ]);
   setProgress(0.38, t('load.parks'));
   await nextFrame();
@@ -217,6 +253,7 @@ async function main() {
       console.log(`LOD2: ${lod2.triangles} 三角形 / アトラス ${lod2.meta.atlases.length} 枚`);
     } catch (e) {
       console.warn('LOD2 の読み込みに失敗しました', e);
+      reportError('lod2', e);
     }
   }
   setProgress(0.94, t('load.landmarks'));
@@ -226,6 +263,7 @@ async function main() {
       scene.add(await loadMatsueCastle());
     } catch (e) {
       console.warn('松江城天守の読み込みに失敗しました', e);
+      reportError('castle', e);
     }
     scene.add(buildYomegashima(terrain));
     scene.add(buildSunsetSpot(terrain, track));
@@ -315,7 +353,7 @@ async function main() {
     const sorted = [...karts].sort((a, b) => (a.finished && b.finished) ? a.finishTime - b.finishTime : a.finished ? -1 : b.finished ? 1 : b.progress - a.progress);
     resultTable.innerHTML = sorted.map((k, i) => {
       const t = k.finished ? fmt(k.finishTime) : '--:--.--';
-      return `<tr style="${k.def.isPlayer ? 'color:#ffd83d;font-weight:800' : ''}"><td>${i + 1}</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${k.def.color.toString(16).padStart(6, '0')}"></span></td><td>${k.def.name}</td><td>${t}</td></tr>`;
+      return `<tr style="${k.def.isPlayer ? 'color:#ffd83d;font-weight:800' : ''}"><td>${i + 1}</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${k.def.color.toString(16).padStart(6, '0')}"></span></td><td>${esc(k.def.name)}</td><td>${t}</td></tr>`;
     }).join('');
     results.style.display = 'block';
     titleMap.style.display = 'none';   // リザルトではコース図を隠す
@@ -331,10 +369,25 @@ async function main() {
   }
   const fmt = (t: number) => { const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(2).padStart(5, '0')}`; };
 
+  report('load', 'ready', { ms: Math.round(performance.now()) });
   startBtn.disabled = false;
-  openBtn.disabled = false;
   startBtn.textContent = t('btn.solo');
-  openBtn.textContent = t('btn.online');
+  const turnAlert = document.getElementById('turnAlert')!;
+  const updateOnlineAvailability = () => {
+    const ready = turnSettled ? hasTurn() : turnListed;
+    openBtn.disabled = !ready;
+    openBtn.textContent = ready ? t('btn.online') : t('btn.onlineUnavailable');
+    openBtn.title = ready ? '' : t('net.turnRequired');
+    // 中継が止まっている理由を文で出す (1 日の上限に達した / 設定を取れない)。
+    // ボタンの title はスマホでは見えないので、ボタンの近くの枠に出す
+    const st = turnSettled ? turnState() : 'unknown';
+    const why = st === 'capped' ? t('net.turnCapped') : st === 'error' ? t('net.turnError') : '';
+    turnAlert.textContent = why;
+    turnAlert.style.display = why ? '' : 'none';
+  };
+  updateOnlineAvailability();
+  // 4 秒で画面のロードを先へ進めた後に TURN 設定 API が応答した場合も復帰させる。
+  void turnLoad?.then(updateOnlineAvailability);
   startBtn.onclick = () => {
     goLandscape();
     presence?.set({ s: 'race' });
@@ -357,7 +410,7 @@ async function main() {
   const countLabel = byId<HTMLSpanElement>('countLabel');
   const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
-  nameInput.value = localStorage.getItem('mk.name') ?? '';
+  nameInput.value = storageGet('mk.name') ?? '';
   // ?room=XXXXX 付きのリンクなら合言葉の部屋へ (UI からは隠したが経路は残してある)
   const linkRoom = normalizeRoomCode(params.get('room') ?? '');
   /** 席に着いた人間の数。増えたら「対戦相手が来た」と知らせる */
@@ -486,6 +539,12 @@ async function main() {
   const presenceSub = byId<HTMLDivElement>('presenceSub');
   const presence2 = byId<HTMLDivElement>('presence2');
   const browserHint = byId<HTMLDivElement>('browserHint');
+  const presenceOptIn = byId<HTMLButtonElement>('presenceOptIn');
+  const netRevoke = byId<HTMLButtonElement>('netRevoke');
+  presenceOptIn.onclick = () => { presenceOptIn.disabled = true; void grantNet(); };
+  // 許可を取り消したら、つながっている相手とも切れるよう読み込み直す
+  netRevoke.onclick = () => { storageSet(NET_CONSENT_KEY, '0'); location.reload(); };
+  netRevoke.style.display = netConsent ? '' : 'none';
   /**
    * 誰ともつながっていない間は「確認中」。これを過ぎたら「見当たりません」にする。
    * 相手が先にいても、見つかるまで 1 分近くかかることがある: trystero の nostr 戦略は
@@ -494,10 +553,24 @@ async function main() {
    * 相手からの応答が捨てられ、相手の次の再告知 (最長 60 秒後) まで待つことになる。
    */
   const PRESENCE_CHECK_MS = 70000;
-  const presenceSince = Date.now();
+  let presenceSince = Date.now();
   let hadWaiting = false;
+  let presenceReported = false;
   function renderPresence() {
-    if (!presence) { presenceBox.style.display = 'none'; return; }
+    if (!presence) {
+      // 通信を許可する前は、許可を求める一文とボタンだけ出す (デバッグ時と、許可した直後の接続待ちは出さない)
+      const ask = !netConsent && !dbg.get('debug');
+      presenceBox.style.display = ask ? '' : 'none';
+      presenceOptIn.style.display = ask ? '' : 'none';
+      if (ask) {
+        presenceBox.classList.remove('live', 'checking');
+        presenceMain.textContent = t('pres.optInLead');
+        presenceSub.textContent = '';
+      }
+      return;
+    }
+    presenceBox.style.display = '';
+    presenceOptIn.style.display = 'none';
     const now = Date.now();
     const s = presence.summary(now);
     const joinable = presence.joinable(now);
@@ -505,6 +578,11 @@ async function main() {
     const target = joinable[0] ?? s.waiting[0] ?? null;
     const canJoin = joinable.length > 0;
     const checking = s.others === 0 && now - presenceSince < PRESENCE_CHECK_MS;
+    // 誰かとつながるまでの時間 (つながらないまま確認を終えたら 0 人として) を記録する
+    if (!presenceReported && (s.others > 0 || !checking)) {
+      presenceReported = true;
+      report('net', 'presence', { others: s.others, sec: Math.round((now - presenceSince) / 1000), relays: relayStatus().open, nat: netProbe?.nat ?? 'unknown', turn: hasTurn() });
+    }
     presenceBox.classList.toggle('live', !!target);
     presenceBox.classList.toggle('checking', !target && checking);
     const sub: string[] = [];
@@ -561,11 +639,19 @@ async function main() {
   // アプリ内ブラウザ (Facebook 等) は WebRTC が不安定なので、Safari / Chrome で開くよう勧める
   const iab = inAppBrowser();
   if (iab) { browserHint.textContent = t('pres.inApp', iab); browserHint.style.display = ''; }
-  if (presence) presence.onChange = renderPresence;
+  // presence に入ったら表示を始める (読み込み時に許可済みなら、ここではもう入っている)
+  const onNetStarted = () => {
+    presenceSince = Date.now();
+    if (presence) presence.onChange = renderPresence;
+    netRevoke.style.display = '';
+    void turnLoad?.then(updateOnlineAvailability);
+    renderPresence();
+  };
+  if (presence) onNetStarted(); else onPresenceStart = onNetStarted;
   renderPresence();
   setInterval(renderPresence, 500);
   // 動作確認用 (tools/presencetest.mjs が読む)
-  (window as never as Record<string, unknown>).__presence = () => presence ? { ...presence.summary(), relays: relayStatus(), probe: netProbe, turn: hasTurn(), inApp: iab } : null;
+  (window as never as Record<string, unknown>).__presence = () => presence ? { ...presence.summary(), rooms: presence.roomIds, relays: relayStatus(), probe: netProbe, turn: hasTurn(), inApp: iab } : null;
 
   function applyLobby(info: LobbyInfo) {
     if (!net) return;
@@ -593,6 +679,7 @@ async function main() {
     // 席が決まる前に発走したら (相手との接続が間に合わなかった) オンラインは
     // あきらめて 1 人で走る。席が無いまま 0 番を名乗ると、ホストとカートを
     // 奪い合ってしまう。
+    report('net', 'start', { humans: net.order.length, seated: net.mySlot >= 0, host: net.isHost });
     if (net.mySlot < 0) {
       net.leave();
       net = null;
@@ -648,7 +735,7 @@ async function main() {
   function connect(code: string, kind: RoomKind) {
     if (net) return;
     const name = (nameInput.value.trim() || t('lobby.anon')).slice(0, 10);
-    localStorage.setItem('mk.name', name);
+    storageSet('mk.name', name);
     myName = name;
     lastHumans = 0;
     try {
@@ -682,15 +769,27 @@ async function main() {
 
   // 公開ロビー: 待っている人が見えていればその部屋へ、いなければ新しい部屋を作って待つ。
   // presence で接続は共有済みなので、待っている人の部屋には席の受け渡しだけで入れる。
-  byId<HTMLButtonElement>('openBtn').onclick = () => {
+  // 押したことを通信の許可とみなす (ボタンの近くに何が伝わるかを書いてある)
+  byId<HTMLButtonElement>('openBtn').onclick = async () => {
     goLandscape();
+    openBtn.disabled = true;
+    await grantNet();
+    await turnLoad;   // 許可した直後は、ここで TURN の資格情報を取る
+    updateOnlineAvailability();
+    if (!hasTurn()) return;   // 中継を確かめられなければ対戦しない (理由はボタンに出る)
     const waiting = presence?.joinable()[0];
     connect(waiting ? waiting.code : newOpenCode(), 'open');
   };
   goBtn.onclick = () => net?.startRace();
   byId<HTMLButtonElement>('leaveBtn').onclick = () => { net?.leave(); location.reload(); };
   // ?room=XXXXX のリンクなら合言葉の部屋へ直接入る (UI は隠してある)
-  if (linkRoom) connect(linkRoom, 'join');
+  // リンクを開いただけで知らない相手とつながらないよう、通信をまだ許可していなければ先に確かめる
+  if (linkRoom && (netConsent || confirm(t('net.confirmLink', linkRoom)))) {
+    void grantNet().then(() => turnLoad).then(() => {
+      updateOnlineAvailability();
+      if (hasTurn()) connect(linkRoom, 'join');
+    });
+  }
 
   /* 合言葉で部屋を作る方式。公開ロビーに切り替えたので止めてあります。
      戻すときは index.html のボタンと合わせてコメントを外してください。
@@ -718,7 +817,9 @@ async function main() {
     const f0 = new THREE.Vector3(Math.cos(player.heading), 0, Math.sin(player.heading));
     camPos.set(player.x - f0.x * 7.5, player.y + 3.2, player.z - f0.z * 7.5);
     camLook.set(player.x + f0.x * 6, player.y + 1.2, player.z + f0.z * 6);
-    karts.forEach((k, i) => { if (i > 0) k.placeAt(track, idx - 3 - 6 * i, (i % 2 ? 3.5 : -3.5)); });
+    // ?ahead=1 でライバルをプレイヤーの前に並べる (撮影用)
+    const ahead = params.get('ahead') === '1';
+    karts.forEach((k, i) => { if (i > 0) k.placeAt(track, ahead ? idx + 4 * i : idx - 3 - 6 * i, (i % 2 ? 3.5 : -3.5)); });
     camMode = Number(params.get('cam') ?? 0);
     state = 'race';
     (window as any).__debug = { track, karts, terrain, scene, camera, rail, THREE };
@@ -744,11 +845,25 @@ async function main() {
   /** 前回位置を送った時刻 (performance.now) */
   let poseTimer = 0;
   const idleInput = { throttle: 0, brake: 0, steer: 0, drift: false, item: false, lookBack: false };
+  // 録画 (プロモ動画の素材撮り): ?rec=1 で実時間に依存せず 1/30 秒ずつ進める。
+  // 描画が遅い環境でも滑らかな映像になるよう、外から window.__recStep(n) で n コマ進めてから撮る。
+  // ?nohud=1 で HUD を隠す。?photo=... に &orbit=<度/秒> を付けると撮影カメラが周回する。
+  const recMode = params.get('rec') === '1';
+  let recTime = 0;
+  if (params.get('nohud')) { document.getElementById('hud')!.style.display = 'none'; document.getElementById('touch')!.style.display = 'none'; }
+  if (recMode) {
+    (window as any).__recStep = (n: number) => {
+      for (let i = 0; i < n; i++) { recTime += 1 / 30; last += 1000 / 30; step(1 / 30, last); }
+    };
+  }
   function frame(now: number) {
     requestAnimationFrame(frame);
-    const dtRaw = Math.min(0.05, (now - last) / 1000);
+    if (recMode) return;
+    const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    const dt = dtRaw;
+    step(dt, now);
+  }
+  function step(dt: number, now: number) {
     fpsFrames++;
     if (now - fpsSince >= 500) {
       const fps = Math.round(fpsFrames * 1000 / (now - fpsSince));
@@ -871,13 +986,16 @@ async function main() {
   // デバッグ用の撮影カメラ: ?photo=<lat>,<lon>,<注視高さ>,<距離>,<方位角deg>
   const photoArg = params.get('photo');
   const photo = photoArg ? photoArg.split(',').map(Number) : null;
+  const orbitSpeed = Number(params.get('orbit') ?? 0);
+  // ?camk=<倍率> で追従カメラを硬くする (撮影用。高速でもカートが小さくならない)
+  const camStiff = Number(params.get('camk') ?? 1);
 
   function updateCamera(dt: number, lookBack: boolean) {
     const fx = Math.cos(player.heading), fz = Math.sin(player.heading);
     if (photo) {
       const [plat, plon, ph = 12, pd = 70, paz = 180] = photo;
       const [tx, tz] = llToXZ(plat, plon);
-      const a = (paz * Math.PI) / 180;
+      const a = ((paz + orbitSpeed * recTime) * Math.PI) / 180;
       camera.position.set(tx + Math.sin(a) * pd, terrain.groundHeight(tx, tz) + ph + pd * 0.35, tz + Math.cos(a) * pd);
       camera.lookAt(tx, terrain.groundHeight(tx, tz) + ph, tz);
       camera.fov = 55; camera.updateProjectionMatrix();
@@ -895,7 +1013,7 @@ async function main() {
     const back = camMode === 2 ? -1 : 1;
     const target = new THREE.Vector3(player.x - fx * dist * dir * back, player.y + height, player.z - fz * dist * dir * back);
     const speedT = clamp(player.speed / 56, 0, 1);
-    const k = camMode === 2 ? 1 : Math.min(1, dt * (5 + speedT * 3));
+    const k = camMode === 2 ? 1 : Math.min(1, dt * (5 + speedT * 3) * camStiff);
     camPos.lerp(target, k);
     if (camMode === 2) camPos.copy(target);
     const lookAt = new THREE.Vector3(player.x + fx * 6 * dir, player.y + 1.2, player.z + fz * 6 * dir);
@@ -948,4 +1066,33 @@ function makeHills(terrain: Terrain): THREE.Mesh {
   return mesh;
 }
 
-main().catch(e => { console.error(e); const b = document.getElementById('startBtn')!; b.textContent = t('load.error', e.message); });
+/**
+ * WebGL のコンテキストが失われたとき (GPU のメモリ不足・ドライバのリセット・モバイルで
+ * 裏に回したときなど)。three.js はそのまま描画を止めるので、放っておくと黒い画面のまま
+ * 戻らない。テクスチャを全部上げ直すより読み込み直すほうが確実なので、案内を出して
+ * 再読み込みしてもらう。ブラウザが自分で戻したときは自動で読み込み直す。
+ */
+function watchContextLoss(canvas: HTMLCanvasElement): void {
+  const box = document.getElementById('glLost');
+  canvas.addEventListener('webglcontextlost', e => {
+    e.preventDefault();   // 戻せる可能性を残す (これが無いと restored が来ない)
+    report('gl', 'contextlost', {});
+    if (!box) return;
+    document.getElementById('glLostMsg')!.textContent = t('gl.lost');
+    const b = document.getElementById('glLostBtn') as HTMLButtonElement;
+    b.textContent = t('gl.reload');
+    b.onclick = () => location.reload();
+    box.style.display = 'flex';
+  });
+  canvas.addEventListener('webglcontextrestored', () => location.reload());
+}
+
+main().catch(e => {
+  console.error(e);
+  reportError('main', e);
+  // 読み込みに失敗したら押して読み込み直せるようにする (無効のままだと手詰まりになる)
+  const b = document.getElementById('startBtn') as HTMLButtonElement;
+  b.textContent = t('load.error', e instanceof Error ? e.message : String(e));
+  b.disabled = false;
+  b.onclick = () => location.reload();
+});

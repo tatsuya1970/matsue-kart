@@ -4,22 +4,38 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        # 切り戻し: 以前のコミット (SHA かタグ) を入れて実行すると、その版を配信し直す。
+        # 次に main へ push すると main の先頭が配信されるので、直すまでは push を控えるか revert する。
+        description: 'Commit SHA or tag to deploy (empty = the head of the selected branch)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# 同時にデプロイが走らないようにする (後から来たものを優先)
+# 同時にデプロイが走らないようにする。デプロイの途中で取り消すと配信が中途半端な
+# 状態で止まることがあるので、後から来たものは前のものが終わるまで待たせる
+# (GitHub の Pages 用テンプレートと同じ)
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.commit.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - id: commit
+        # vite.config.ts が画面の隅とバンドルに埋め込むのと同じ短縮 SHA (配信後の確認に使う)
+        run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -30,10 +46,24 @@ jobs:
         run: npm ci
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: Test
+        run: npm test
+      - name: Validate TURN configuration
+        # オンライン対戦を出す本番では TURN 無しを許可しない。設定 API も実際に
+        # turn:/turns: の ICE server を返すところまで確認してから成果物へ入れる。
+        run: npm run turn:prepare
+        env:
+          TURN_CONFIG_URL: ${{ vars.TURN_CONFIG_URL }}
       - name: Build
         # 独自ドメイン直下で配信するので base は既定の '/' のまま。
         # https://<user>.github.io/matsue-kart/ に戻すときは BASE_PATH: /matsue-kart/ を渡す。
         run: npm run build
+        env:
+          # 例外・読み込み失敗の送り先 (src/telemetry.ts)。リポジトリ変数が無ければ送らない
+          VITE_TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
+      - name: Check dist
+        # データの欠け・.json と .bin の食い違い・JS の参照切れがあれば配信しない
+        run: npm run check:dist
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -44,6 +74,21 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  smoke:
+    # 配信された版を外から確かめる。CDN に行き渡るまで最大 10 分待つ
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/check_site.mjs "${{ needs.deploy.outputs.page_url }}" --commit "${{ needs.build.outputs.commit }}" --wait 600

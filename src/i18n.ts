@@ -15,6 +15,8 @@
 // index.html の固定文言は data-en / data-en-html 属性に英語を持たせ、
 // applyDomLang() がまとめて差し替える。日本語がソースに残るので読みやすい。
 
+import { storageGet, storageSet } from './storage';
+
 export type Lang = 'ja' | 'en';
 
 const STORAGE_KEY = 'mk.lang';
@@ -30,7 +32,7 @@ function resolve(): Lang {
   const q = new URLSearchParams(location.search).get('lang');
   if (q === 'ja' || q === 'en') return q;
   if (onEnPath()) return 'en';
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = storageGet(STORAGE_KEY);
   if (saved === 'ja' || saved === 'en') return saved;
   return (navigator.language || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
 }
@@ -43,7 +45,7 @@ export const isJa = lang === 'ja';
  * 本番はその言語の URL へ移る。開発サーバーには /en/ が無いので ?lang= を使う。
  */
 export function setLang(l: Lang): void {
-  localStorage.setItem(STORAGE_KEY, l);
+  storageSet(STORAGE_KEY, l);
   const params = new URLSearchParams(location.search);
   params.delete('lang');
   if (import.meta.env.DEV) {
@@ -72,10 +74,13 @@ const JA: Dict = {
   'load.landmarks': '松江城天守 (PLATEAU LOD3)・嫁ヶ島を配置中...',
   'load.lod2Shape': 'LOD2 形状を読み込み中...',
   'load.lod2Tex': 'LOD2 テクスチャ {0}/{1}',
-  'load.error': 'エラー: {0}',
+  'load.error': 'エラー: {0}（押すと再読み込み）',
+  'gl.lost': '画面の描画が止まりました（GPU のメモリ不足など）。画質を下げると起きにくくなります。',
+  'gl.reload': '再読み込み',
 
   'btn.solo': '1人PLAY',
   'btn.online': '対戦PLAY',
+  'btn.onlineUnavailable': '対戦（現在利用不可）',
   'btn.again': 'もう一度走る',
   'btn.startNow': 'すぐ始める',
   'btn.leave': 'やめる',
@@ -92,6 +97,11 @@ const JA: Dict = {
   'lobby.arrived': '🎉 対戦相手が来ました!',
   'net.failed': '接続できませんでした: {0}',
   'net.busy': 'この部屋はレース中です',
+  'pres.optInLead': '対戦待ちの人がいるかは、通信を許可すると表示されます。',
+  'net.confirmLink': '部屋 {0} に入りますか？\n\n他のプレイヤーのブラウザと直接接続するため、あなたの IP アドレスが相手と接続用の公開サーバーに伝わります。',
+  'net.turnRequired': '安全に接続できる TURN 中継を確認できないため、対戦は現在利用できません',
+  'net.turnCapped': '今日は対戦はできません。午前 0 時にリセットします（中継サーバーの 1 日の利用上限に達したため）',
+  'net.turnError': '中継サーバーの設定を取得できないため、いまは対戦できません。しばらくしてからページを読み込み直してください',
 
   'pres.checking': '対戦待ちの人がいるか確認しています...',
   'pres.none': 'いま対戦待ちの人は見当たりません',
@@ -146,10 +156,13 @@ const EN: Dict = {
   'load.landmarks': 'Placing Matsue Castle (PLATEAU LOD3) and Yomegashima...',
   'load.lod2Shape': 'Loading LOD2 geometry...',
   'load.lod2Tex': 'LOD2 textures {0}/{1}',
-  'load.error': 'Error: {0}',
+  'load.error': 'Error: {0} (tap to reload)',
+  'gl.lost': 'Rendering stopped (the GPU may have run out of memory). A lower graphics setting makes this less likely.',
+  'gl.reload': 'Reload',
 
   'btn.solo': 'SOLO PLAY',
   'btn.online': 'ONLINE PLAY',
+  'btn.onlineUnavailable': 'ONLINE UNAVAILABLE',
   'btn.again': 'Race again',
   'btn.startNow': 'Start now',
   'btn.leave': 'Leave',
@@ -166,6 +179,11 @@ const EN: Dict = {
   'lobby.arrived': '🎉 An opponent has arrived!',
   'net.failed': 'Could not connect: {0}',
   'net.busy': 'This room is mid-race',
+  'pres.optInLead': 'Allow the connection to see whether anyone is waiting to race.',
+  'net.confirmLink': 'Join room {0}?\n\nYou will connect directly to other players\' browsers, so your IP address will be visible to them and to the public servers used to connect.',
+  'net.turnRequired': 'Online play is unavailable because a working TURN relay could not be verified',
+  'net.turnCapped': 'Online play is unavailable today. It resets at midnight (Japan time) because the relay server reached its daily limit',
+  'net.turnError': 'Online play is unavailable right now because the relay settings could not be loaded. Reload the page later',
 
   'pres.checking': 'Checking whether anyone is waiting...',
   'pres.none': 'No one seems to be waiting right now',

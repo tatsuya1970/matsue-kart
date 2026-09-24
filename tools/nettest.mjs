@@ -15,6 +15,8 @@ const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=sw
 
 async function open(label, name) {
   const page = await browser.newPage({ viewport: { width: 800, height: 450 } });
+  // 通信の許可を済ませた状態で開く (src/main.ts の startNet)
+  await page.addInitScript(k => localStorage.setItem(k, '1'), 'mk.netConsent');
   page.on('pageerror', e => console.log(`[${label} pageerror] ${e.message}`));
   page.on('console', m => { if (m.type() === 'error') console.log(`[${label} error] ${m.text()}`); });
   await page.goto(BASE + QUERY, { waitUntil: 'load' });

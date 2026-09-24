@@ -163,6 +163,10 @@ DEM は 2 次メッシュ 533310 を 4 分割した 4 ファイル（計 3GB）�
 
 **トップ画面に「対戦待ち」の状況を出します。** 対戦PLAY を押す前から、レースの部屋とは別の常設の部屋（`mk-presence`）に全員が入り、「トップ画面にいる / 対戦待ち / レース中」を伝え合います（`src/net.ts` の `Presence`）。誰かが待っていれば「いま 1 人が対戦待ち（たろう）対戦相手を待っています」、カウントダウン中なら「発走まで 18 秒」と緑で光り、ロビーで待っている側にも「トップ画面に 1 人います」と出ます。
 
+**presence は人が増えたら分室に分かれます。** WebRTC は全員どうしで張るので、1 つの部屋に N 人いると 1 台あたり N-1 本の接続になり、人が集まった瞬間にスマホの CPU と回線が先に尽きます。最初の部屋（`mk-presence`）が 12 人（`PRESENCE_SPLIT_AT`）を超えたら、トップ画面の人は ID で決まる 4 つの分室（`mk-presence-0`〜`3`）のどれかへ移ります。対戦待ちの人は最初の部屋と全分室に入るので、どこにいる人からも見え、待っている人どうしも互いに見えます。代わりに、分かれた後のトップ画面の人数は自分の部屋の分だけです。分室を増やすと、対戦待ちの人が入る部屋ごとにリレーへの告知が増えるので、流量制限に掛からないよう 4 にしてあります。
+
+**座席表と発走の合図は、自分から見たホストからだけ受け取ります**（`src/net.ts` の `acceptLobby`）。直結できない組（対称型 NAT どうしで TURN が無い等）がいると、ホストの見え方が人によって食い違います。誰からでも受け取ると、自分がホストだと思い込んだ 2 人の座席表が交互に届いて席が揺れるので、食い違った相手の座席表は捨てます。ホストとつながっていない人は席をもらえないまま発走し、1 人で走ります。
+
 trystero 0.25 は同じ appId なら部屋をまたいで WebRTC 接続を共有します（`@trystero-p2p/core` の SharedPeerManager）。そのため、トップ画面でつながった相手とは、対戦PLAY を押した瞬間にリレーの往復なしで同じ部屋に入れます。相手とつながるまでの 8〜19 秒はページの読み込み中に済み、カウントダウン中の部屋にも締切の 3 秒前（`JOIN_MIN_WAIT`）まで入れます。
 
 合言葉で部屋を作る方式はコメントアウトしてあります（同時に遊ぶ人が少ないうちは、待ち時間が読めるほうが遊びやすいため）。`index.html` と `src/main.ts` の「合言葉」の箇所を戻せば復活します。URL に `?room=XXXXX` を付けると、今でも合言葉の部屋へ直接入れます。
@@ -195,19 +199,33 @@ trystero 0.25 は同じ appId なら部屋をまたいで WebRTC 接続を共有
 
 **TURN の設定。** 誰でも使える無料の公開 TURN（Open Relay）は候補が取れなくなっていた（2026-09 実測）ので、サイトの持ち主が用意します。`public/turn.json` を置くと、ページ読み込み時に読んで trystero の `turnConfig` に渡します。無ければ STUN だけで動きます（直結できる相手とだけつながる）。
 
-- いちばん簡単なのは [metered.ca](https://www.metered.ca/stun-turn) の無料プラン（月 0.5 GB）。登録して TURN の API キーを取り、`public/turn.json` に次のように書きます。API キーはページに載るので公開されますが、できるのは自分の枠を使った TURN 資格情報の発行だけです。
+本番デプロイでは TURN を必須にしています。GitHub Actions の repository variable `TURN_CONFIG_URL` に、短期の資格情報を返す HTTPS API を設定してください。**`turn.json` は配信されて誰でも読めるので、固定の資格情報（`username` / `credential`）も、`?apiKey=...` のように鍵を付けた URL も入れられません。** `npm run turn:prepare` と配信物の点検（`tools/check_site.mjs`）は、資格情報を直接書いた設定や鍵付きの URL を見つけるとデプロイを止めます。以前の secret `TURN_CONFIG_JSON` は同じ理由で廃止しました（残っているとデプロイが止まるので削除してください）。`npm run turn:prepare` は設定 API を呼び、応答に `turn:` または `turns:` が無ければデプロイを停止します。ローカルで本番相当のビルドを確認するときも、先に同じコマンドを実行してください。
 
-  ```json
-  { "url": "https://<アプリ名>.metered.live/api/v1/turn/credentials?apiKey=<API キー>" }
-  ```
+中継は [metered.ca](https://www.metered.ca/stun-turn) の無料プラン（月 500 MB、上りと下りの合計）を使います。カード登録が無いので枠を超えても請求は発生せず、費用の上限がはっきりします（枠を超えたときに中継が止まるかどうかは公式には明記されていません）。代わりに、枠が尽きた月は直結できない組（携帯回線どうしなど）が翌月まで対戦できないと考えてください。中継 1 組の 5 分レースが 4〜8 MB なので、月に 60〜120 組ぶんです。使用量は metered.ca のダッシュボードで見られます。
 
-- 自前の TURN（coturn 等）や固定の資格情報なら、ICE サーバーの一覧をそのまま書きます。
+登録してアプリを作り、TURN Server の画面で資格情報（credential）を 1 つ作ると、その行の「Show API Key」に資格情報用の API キーが出ます。ドメイン（`<アプリ名>.metered.live`）は左メニューの Developers にあります。`https://<アプリ名>.metered.live/api/v1/turn/credentials?apiKey=<資格情報の API キー>` が資格情報を返す URL です。Developers にある Secret key はアカウント全体の鍵なので、この URL には使いません。この URL が鍵そのものなので `turn.json` には書かず、`workers/turn/` の Cloudflare Worker に持たせます。資格情報は既定では期限切れにならないので、漏れたと思ったらダッシュボードで無効化して作り直し、Worker の secret を入れ替えます。Worker はサイトの Origin からの GET だけを metered.ca へ通し、1 つの IP からの回数と 1 日の発行回数を制限し、応答を 60 秒使い回します（`worker.js` の冒頭に、守れることと守れないことを書いてあります）。松江・広島・福山で 1 つを共有し、どのリポジトリからデプロイしても同じ Worker が更新されます。
 
-  ```json
-  { "iceServers": [{ "urls": ["turn:example.com:3478", "turns:example.com:5349"], "username": "u", "credential": "p" }] }
-  ```
+1. metered.ca でアプリと資格情報を 1 つ作り、資格情報の API キーで上の URL を組み立てます。`curl` で開いて `turn:` を含む JSON が返れば正しい URL です。
+2. Worker に secret を入れてデプロイします。
 
-- [Cloudflare の TURN](https://developers.cloudflare.com/realtime/turn/)（月 1 TB まで無料）は資格情報を短命で発行する API なので、鍵をページに載せられません。Cloudflare Workers 等で発行する URL を作り、その URL を `"url"` に書きます（返す JSON は `iceServers` の配列、または `{ "iceServers": [...] }`）。
+   ```sh
+   cd workers/turn
+   npx wrangler login
+   npx wrangler secret put TURN_API_URL      # metered.ca の ?apiKey=... 付きの URL
+   npx wrangler deploy                       # 出てきた URL を各リポジトリの TURN_CONFIG_URL に設定する
+   ```
+
+3. 表示された Worker の URL を、松江・広島・福山それぞれの repository variable `TURN_CONFIG_URL` に同じ値で設定します。
+
+1 日に発行する回数の上限は `wrangler.toml` の `DAILY_CAP`（既定 500、日本時間の日付で数える）です。達した日は Worker が 503 と `{ "error": "daily_cap" }` を返し、ページ側は対戦PLAY を出さず、その下に「今日は対戦はできません。午前 0 時にリセットします」と出します（`src/net.ts` の `turnState`、`src/main.ts` の `updateOnlineAvailability`）。資格情報 API がそれ以外の理由で応答しないときは「中継サーバーの設定を取得できないため、いまは対戦できません」と出します。定期監視（`monitor.yml`）も同じ API を呼ぶので、止まっている間は監視が失敗して GitHub から通知が届きます。翌日 0 時に戻ります。通常は、通信を許可した人のページ表示 1 回が 1 回にあたります（独自ドメインでキャッシュが効いていれば 1 分に 1 回まで）。いまの数は `https://<Worker の URL>/status` で見られます。この上限は資格情報を大量に取られて月の枠が一気に尽きるのを防ぐためのもので、転送量そのものの上限は metered.ca のプランで決まります。数は Durable Object（`worker.js` の `DailyCounter`）で数えており、無料プランで使える SQLite 方式にしてあります。
+
+`npm run turn:prepare` と `tools/check_site.mjs` は `public/CNAME` のドメインを Origin として名乗って Worker を呼ぶので、CI と定期監視からも検査できます。Worker を `*.workers.dev` のまま使うと Cache API は効かず、発行 API を守るのは回数制限だけになります。`citykart.jp` の DNS が Cloudflare にあるなら、`turn.citykart.jp` のような独自ドメインに載せるとキャッシュも効きます。
+
+別の上流に切り替えるとき:
+
+- [Cloudflare の TURN](https://developers.cloudflare.com/realtime/turn/) は月 1,000 GB まで無料ですが、超過分は 1 GB あたり 0.05 ドルの従量課金で、上限を設定する仕組みがありません。Bearer 認証の POST で資格情報を発行するので、`TURN_API_URL` に `https://rtc.live.cloudflare.com/v1/turn/keys/<Key ID>/credentials/generate-ice-servers`、`TURN_API_TOKEN` に TURN Key の API トークンを入れ、`wrangler.toml` の `TURN_API_METHOD = "POST"` と `TURN_API_BODY` のコメントを外します。本文の `ttl` が資格情報の有効期間（秒）です。応答の `iceServers` が配列でなくても Worker が配列にそろえます。
+
+- 自前の TURN（coturn 等）なら、TURN の REST API 方式（共有鍵から期限付きの資格情報を作る）で資格情報を発行する小さな API を用意し、その URL を `TURN_API_URL` に入れます。**固定の資格情報を ICE サーバーの一覧に直接書くのはやめてください。** `turn.json` は配信されるので誰でも読め、第三者に中継を使われます（転送量の課金や上限の枯渇、踏み台）。
 
 中継が通っているかは、対称型 NAT の端末でトップ画面に「TURN で中継できます」と出るかで分かります。レースの位置情報は 1 組あたり毎秒 10 KB ほどなので、5 分のレースで 3〜4 MB です。
 
@@ -267,6 +285,20 @@ npm run dev             # http://localhost:5182/
 `main` に push すると GitHub Actions が GitHub Pages へ公開します（`.github/workflows/deploy.yml`）。
 
 公開先: **https://matsue.citykart.jp/**
+
+デプロイの流れは次のとおりです。どこかで失敗すると GitHub から通知が届きます。
+
+1. **テスト**（`npm test`。`tests/` の vitest）
+2. **ビルド**
+3. **配信物の点検**（`npm run check:dist` = `tools/check_site.mjs dist`）。index.html から読む JS があるか、地形・LOD2・天守の `.bin` が `.json` の頂点数と同じ長さか、アトラスとテクスチャが揃っているかを見ます。欠けていれば配信しません。
+4. **配信**
+5. **配信後の確認**（`smoke` ジョブ）。本番の URL を同じ点検にかけ、バンドルに埋め込んだコミットがいま配信されている版と一致するまで最大 10 分待ちます。
+
+**切り戻し。** GitHub の Actions → Deploy to GitHub Pages → Run workflow で、`ref` に戻したいコミットの SHA（かタグ）を入れて実行すると、その版を配信し直します。次に `main` へ push すると `main` の先頭が配信されるので、原因を直すまでは `git revert` で `main` 自体を戻しておくのが確実です。
+
+**外形監視。** `.github/workflows/monitor.yml` が 3 時間おきに本番を点検し、対戦のシグナリングに使う nostr リレー 8 つのうち 3 つ以上につながるかも見ます（`node tools/check_site.mjs https://matsue.citykart.jp/ --relays` で手元でも実行できます）。本番のトップ画面をブラウザで開くと利用者の「対戦待ち」表示に監視が映ってしまうので、HTTP とリレーの口だけを見ています。リポジトリに 60 日動きが無いと、GitHub は定期実行を自動で止めます。
+
+**本番で起きたことの記録。** 捕まえ損ねた例外、読み込みの失敗、WebGL のコンテキスト喪失、読み込み完了までの時間、presence で誰かとつながるまでの時間、対戦の発走人数を `src/telemetry.ts` が記録します。送り先はリポジトリ変数 `TELEMETRY_URL`（ビルド時に `VITE_TELEMETRY_URL` として埋め込む）で、未設定なら送らずにページ内に残すだけです（コンソールで `__telemetry()`）。受け口は `text/plain` の POST を受けて保存するだけのもの（Cloudflare Workers の無料枠など）で足ります。送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送りません。
 
 プロジェクトページはサブパス配信なので `base` が要ります。`vite preview` は `command` が `'serve'` 扱いになり、`command === 'build'` で分岐するとビルド成果物を root で配信してしまって検証にならないため、環境変数で渡しています。
 
@@ -399,6 +431,10 @@ tools/build_en_page.mjs    ビルド後に英語版 dist/en/index.html を書き
 tools/probe_scene.mjs      画面前方の物体をレイキャストで特定
 tools/probe_uv.mjs         UV とアトラス参照先の特定
 tools/check_trains.mjs     車両が走行しているかの確認
+tools/check_site.mjs       配信物の点検 (dist/ か本番 URL。.bin と .json の食い違い・JS の参照切れ・リレー)
+tests/                     vitest の単体テスト (npm test)
+src/fetch.ts      アセットの取得 (状態の確認・時間切れ・再試行・長さの検証)
+src/telemetry.ts  本番で起きた例外・読み込み失敗・対戦の成否の記録
 src/geo.ts        座標変換 (等距円筒近似, 原点 = 松江駅北口の駅前通り)
 src/terrain.ts    地形メッシュ + 地面テクスチャ (道路・河川)
 src/buildings.ts  LOD1 建物メッシュ (テクスチャ 6 種)

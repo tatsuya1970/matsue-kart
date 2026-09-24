@@ -12,10 +12,17 @@
 //   - アイテムボックスの取得と被弾は「そのカートを持っている側」だけが判定し、
 //     結果をイベントで配る。判定を一箇所に寄せないと、各自の画面で別々に
 //     当たったことになってしまう。
+//   - 位置もイベントも「その席の持ち主」から届いたものだけを受け入れる (slotOwner)。
+//     改造したクライアントが他人の席のゴールや被弾を送っても捨てる。自分の席の
+//     値をいじる (瞬間移動など) のはクライアント権威である以上どのみち防げない。
 //   - ホストは部屋を作った人。抜けたら残った中で ID が最小の人へ自動的に移る。
+//     作った人という申告は相手の自己申告で、サーバーが無いので確かめようがない。
+//     ホストにできるのは席順・締切・発走の合図・空き枠の AI の操作までで、
+//     座席表の中身は acceptLobby / sanitizeLobby で絞る。
 import { joinRoom, selfId, getRelaySockets } from 'trystero/nostr';
 import type { JsonValue, MessageAction, Room } from 'trystero/nostr';
 import { assetUrl } from './geo';
+import { fetchJson, FetchError } from './fetch';
 
 // 開発サーバー (vite) では別の appId にして、本番の利用者と部屋や presence を共有しない。
 // 同じにしておくと、テスト用のブラウザが本番のトップ画面に「見ている人」として映り、
@@ -48,18 +55,65 @@ export function relayStatus(): { open: number; total: number } {
 type IceServer = { urls: string | string[]; username?: string; credential?: string };
 let turnConfig: IceServer[] = [];
 
+export function isTurnIceServer(server: IceServer): boolean {
+  const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+  return urls.some(url => typeof url === 'string' && /^turns?:/i.test(url));
+}
+
+/**
+ * TURN の資格情報を取れたか、取れなかった理由 (画面の案内用)。
+ *   unknown = まだ読んでいない / ok = 取れた / none = turn.json が無い (開発サーバーなど)
+ *   capped = 資格情報 API (workers/turn/) が 1 日の発行上限に達した (翌日 0 時に戻る)
+ *   error = 資格情報 API が応答しない・壊れた応答
+ */
+export type TurnStatus = 'unknown' | 'ok' | 'none' | 'capped' | 'error';
+let turnStatus: TurnStatus = 'unknown';
+
+export function turnState(): TurnStatus {
+  return turnStatus;
+}
+
 export async function loadTurn(): Promise<number> {
+  let cfg: unknown;
   try {
-    const res = await fetch(assetUrl('turn.json'), { cache: 'no-store' });
-    if (!res.ok) return 0;
-    let cfg: unknown = await res.json();
-    const asObj = cfg as { url?: unknown; iceServers?: unknown } | null;
-    if (asObj && typeof asObj.url === 'string') cfg = await (await fetch(asObj.url)).json();
-    const list = Array.isArray(cfg) ? cfg : Array.isArray((cfg as { iceServers?: unknown })?.iceServers) ? (cfg as { iceServers: unknown[] }).iceServers : [];
-    turnConfig = (list as IceServer[]).filter(s => s && s.urls);
-    return turnConfig.length;
+    // 置いていない (404) のが普通なので再試行しない。呼び出し側も 4 秒で見切る
+    cfg = await fetchJson<unknown>(assetUrl('turn.json'), { cache: 'no-store', timeoutMs: 3000, retries: 0 });
   } catch {
+    turnStatus = 'none';
     return 0;
+  }
+  const asObj = cfg as { url?: unknown; iceServers?: unknown } | null;
+  if (asObj && typeof asObj.url === 'string') {
+    try {
+      cfg = await fetchJson<unknown>(asObj.url, { timeoutMs: 3000, retries: 0 });
+    } catch (e) {
+      // 資格情報 API (workers/turn/) は 1 日の上限に達すると 503 と { "error": "daily_cap" } を返す。
+      // 画面で「今日は対戦できない」と伝えるために、ほかの失敗と区別する
+      turnStatus = e instanceof FetchError && e.status === 503 && e.body.includes('daily_cap') ? 'capped' : 'error';
+      return 0;
+    }
+  }
+  const list = Array.isArray(cfg) ? cfg : Array.isArray((cfg as { iceServers?: unknown })?.iceServers) ? (cfg as { iceServers: unknown[] }).iceServers : [];
+  // STUN だけの応答を「TURN 設定済み」と誤表示しない。
+  turnConfig = (list as IceServer[]).filter(isTurnIceServer);
+  turnStatus = turnConfig.length ? 'ok' : 'none';
+  return turnConfig.length;
+}
+
+/**
+ * turn.json が置かれていて TURN を使える見込みがあるか。同じサイトのファイルだけを読み、
+ * 資格情報の発行 API (外部) はまだ呼ばない。通信の許可を得る前に、対戦PLAY を
+ * 出せるかを決めるために使う。
+ */
+export async function turnConfigured(): Promise<boolean> {
+  try {
+    const cfg = await fetchJson<unknown>(assetUrl('turn.json'), { cache: 'no-store', timeoutMs: 3000, retries: 0 });
+    const o = cfg as { url?: unknown; iceServers?: unknown } | null;
+    if (o && typeof o.url === 'string') return true;
+    const list = Array.isArray(cfg) ? cfg : Array.isArray(o?.iceServers) ? (o!.iceServers as unknown[]) : [];
+    return (list as IceServer[]).some(isTurnIceServer);
+  } catch {
+    return false;
   }
 }
 
@@ -146,6 +200,8 @@ export interface Pose {
 }
 
 const POSE_LEN = 12;
+/** カートの枠の数 (src/main.ts の RACERS と同じ)。席も pose の slot もこの範囲に収まる */
+export const MAX_SLOTS = 8;
 
 function packPose(p: Pose): number[] {
   return [p.slot, p.x, p.z, p.y, p.heading, p.speed, p.drifting, p.spin, p.lap, p.s, p.boost, p.star];
@@ -173,6 +229,61 @@ export type NetEvent =
   | { t: 'use'; slot: number; item: string; x: number; z: number; y: number; heading: number; speed: number }
   | { t: 'hit'; slot: number }
   | { t: 'fin'; slot: number; time: number };
+
+/** アイテムの種類 (src/kart.ts の ItemType と合わせる)。受信したイベントの検査用 */
+const ITEM_TYPES: ReadonlySet<string> = new Set(['mushroom', 'banana', 'shell', 'star']);
+
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * その席のカートを動かしてよい人。人の席は座席表の order[slot]、空き枠 (AI) はホスト。
+ * 席が範囲外・未定なら '' (誰にも渡さない)。
+ *
+ * 受信側はこれと送り主を照合する。照合しないと、改造したクライアントが他人の席の
+ * ゴール・被弾・アイテム使用や位置を送れてしまう (自分の席に届いた fin で自分の
+ * カートが AI 操作へ切り替わり、リザルトでは 0 秒で 1 位になる)。
+ */
+export function slotOwner(order: string[], host: string, slot: unknown): string {
+  if (!Number.isInteger(slot) || (slot as number) < 0 || (slot as number) >= MAX_SLOTS) return '';
+  return (slot as number) < order.length ? order[slot as number] : host;
+}
+
+/**
+ * 受信した位置の配列を検査して Pose に戻す。持ち主でない席と壊れた値は捨てる。
+ * 配列は POSE_LEN の倍数で、最大でも全枠分。値はすべて有限の数 (NaN / Infinity を
+ * 入れると、受け取った側でそのカートが消えたり順位の計算が崩れたりする)。
+ */
+export function parsePoses(d: unknown, sender: string, order: string[], host: string): Pose[] {
+  if (!Array.isArray(d) || !d.length || d.length % POSE_LEN !== 0 || d.length > POSE_LEN * MAX_SLOTS) return [];
+  if (!d.every(finite)) return [];
+  const out: Pose[] = [];
+  for (let i = 0; i < d.length; i += POSE_LEN) {
+    const p = unpackPose(d as number[], i);
+    if (slotOwner(order, host, p.slot) === sender) out.push(p);
+  }
+  return out;
+}
+
+/** 受信したイベントを検査する。形が違う・持ち主でない席・知らないアイテムは null */
+export function parseEvent(d: unknown, sender: string, order: string[], host: string): NetEvent | null {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  const e = d as Record<string, unknown>;
+  const owner = slotOwner(order, host, e.slot);
+  if (!owner || owner !== sender) return null;
+  const s = e.slot as number;
+  switch (e.t) {
+    case 'hit':
+      return { t: 'hit', slot: s };
+    case 'fin':
+      return finite(e.time) && e.time >= 0 ? { t: 'fin', slot: s, time: e.time } : null;
+    case 'use':
+      if (typeof e.item !== 'string' || !ITEM_TYPES.has(e.item)) return null;
+      if (![e.x, e.z, e.y, e.heading, e.speed].every(finite)) return null;
+      return { t: 'use', slot: s, item: e.item, x: e.x as number, z: e.z as number, y: e.y as number, heading: e.heading as number, speed: e.speed as number };
+    default:
+      return null;
+  }
+}
 
 export interface NetHandlers {
   onLobby(info: LobbyInfo): void;
@@ -217,6 +328,58 @@ export function newOpenCode(): string {
 
 /** create=合言葉で部屋を作った / join=合言葉で参加した / open=公開ロビー */
 export type RoomKind = 'create' | 'join' | 'open';
+
+/**
+ * ホストを決める。部屋を作った人がいればその人、いなければ ID が最小の人。
+ * here は部屋にいる全員の ID (自分を含む, 昇順)。
+ *
+ * 参加した直後は、まだ相手の挨拶が届いておらず作成者が誰か分からない。
+ * そのまま ID 順で決めると、参加した側が一瞬ホストだと思い込んで座席表を
+ * 配ってしまい、席が入れ替わる。合言葉で参加した側は少し待つ ('' = まだ決めない)。
+ */
+export function resolveHost(here: string[], creators: Record<string, boolean>, kind: RoomKind, sinceJoinMs: number): string {
+  const made = here.filter(id => creators[id]);
+  if (made.length) return made[0];
+  // 公開ロビーには作成者がいないので待つ意味がない
+  if (kind === 'join' && sinceJoinMs < HOST_GRACE_MS) return '';
+  return here[0] ?? '';
+}
+
+/**
+ * 座席表を受け入れてよいか。自分から見たホストが送ったものだけを採る。
+ *
+ * 誰からでも受け取ると、直結できない組 (対称型 NAT どうしで TURN が無い) がいるときに
+ * 「自分がホストだ」と思い込んだ 2 人が別々の座席表を配り、受け取った側の席が
+ * 行ったり来たりする。改造したクライアントが座席表を差し替えることもできてしまう。
+ * 自分から見たホストと食い違う相手の座席表は捨て、ホストとつながっていない人は
+ * 席をもらえないまま発走して 1 人で走る (main.ts の beginOnlineRace)。
+ */
+export function acceptLobby(sender: string, host: string, info: unknown): info is LobbyInfo {
+  if (!host || sender !== host) return false;
+  const i = info as Partial<LobbyInfo> | null;
+  if (!i || !Array.isArray(i.order) || i.order.length > MAX_SLOTS) return false;
+  if (!i.order.every(id => typeof id === 'string') || !i.order.includes(sender)) return false;
+  return typeof i.names === 'object' && i.names !== null;
+}
+
+/**
+ * 受け入れた座席表の中身を正規化する。名前は画面 (ロビー・吹き出し・リザルト) に出すので、
+ * 文字列にして 10 文字に切る。ホストが改造したクライアントでも HTML や長い文字列を
+ * 混ぜられないようにする。
+ */
+export function sanitizeLobby(info: LobbyInfo, fallbackSeed: number): LobbyInfo {
+  const names: Record<string, string> = {};
+  for (const id of info.order) names[id] = String(info.names[id] ?? '???').slice(0, 10);
+  const seed = Number(info.seed);
+  const deadline = Number(info.deadline);
+  return {
+    order: [...info.order],
+    names,
+    seed: Number.isFinite(seed) ? seed : fallbackSeed,
+    // Infinity を通すとカウントダウンが「Infinity 秒」のまま止まる
+    deadline: Number.isFinite(deadline) && deadline > 0 ? deadline : 0,
+  };
+}
 
 export class NetSession {
   readonly code: string;
@@ -269,35 +432,35 @@ export class NetSession {
       },
     });
     this.lobby = this.room.makeAction<JsonValue>('lobby', {
-      onMessage: d => {
-        const info = d as unknown as LobbyInfo;
-        if (!info || !Array.isArray(info.order)) return;
+      onMessage: (d, ctx) => {
+        const raw: unknown = d;
+        if (!acceptLobby(ctx.peerId, this.host, raw)) return;
+        const info = sanitizeLobby(raw, this.seed);
         this.order = info.order;
         this.names = { ...this.names, ...info.names };
         this.seed = info.seed;
-        this.deadline = Number(info.deadline) || 0;
+        this.deadline = info.deadline;
         handlers.onLobby(info);
       },
     });
     this.go = this.room.makeAction<JsonValue>('go', {
-      onMessage: () => { if (!this.started) { this.started = true; handlers.onStart(); } },
+      // 発走の合図もホストからだけ受ける (食い違ったホストの合図で走り出さないように)
+      onMessage: (_, ctx) => { if (ctx.peerId === this.host && !this.started) { this.started = true; handlers.onStart(); } },
     });
     this.busy = this.room.makeAction<JsonValue>('busy', {
       onMessage: () => { if (!this.started && this.mySlot < 0) handlers.onBusy(); },
     });
+    // 位置もイベントも、その席の持ち主から届いたものだけを受け入れる (slotOwner)
     this.pose = this.room.makeAction<JsonValue>('pose', {
-      onMessage: d => {
-        if (!Array.isArray(d)) return;
-        const a = d as number[];
-        const out: Pose[] = [];
-        for (let i = 0; i + POSE_LEN <= a.length; i += POSE_LEN) out.push(unpackPose(a, i));
+      onMessage: (d, ctx) => {
+        const out = parsePoses(d, ctx.peerId, this.order, this.host);
         if (out.length) handlers.onPose(out);
       },
     });
     this.ev = this.room.makeAction<JsonValue>('ev', {
-      onMessage: d => {
-        const e = d as unknown as NetEvent;
-        if (e && typeof e.t === 'string') handlers.onEvent(e);
+      onMessage: (d, ctx) => {
+        const e = parseEvent(d, ctx.peerId, this.order, this.host);
+        if (e) handlers.onEvent(e);
       },
     });
 
@@ -323,19 +486,10 @@ export class NetSession {
 
   /**
    * ホスト = 部屋を作った人。抜けたら残った中で ID が最小の人へ自動的に移る。
-   * ID 順だけで決めると「部屋を作ったのに開始ボタンを押せない」ことになる。
-   *
-   * 参加した直後は、まだ相手の挨拶が届いておらず作成者が誰か分からない。
-   * そのまま ID 順で決めると、参加した側が一瞬ホストだと思い込んで座席表を
-   * 配ってしまい、席が入れ替わる。作成者でない場合は少し待つ。
+   * ID 順だけで決めると「部屋を作ったのに開始ボタンを押せない」ことになる (resolveHost)。
    */
   get host(): string {
-    const here = this.peerIds();
-    const made = here.filter(id => this.creators[id]);
-    if (made.length) return made[0];
-    // 公開ロビーには作成者がいないので待つ意味がない
-    if (this.kind === 'join' && Date.now() - this.joinedAt < HOST_GRACE_MS) return '';
-    return here[0];
+    return resolveHost(this.peerIds(), this.creators, this.kind, Date.now() - this.joinedAt);
   }
 
   get isHost(): boolean {
@@ -418,6 +572,19 @@ export class NetSession {
 // (@trystero-p2p/core の SharedPeerManager)。ここでつながった相手とは、
 // 対戦PLAY を押した瞬間にリレーの往復なしで同じ部屋に入れるので、
 // 相手とつながるまでの 8〜19 秒をページの読み込み中に済ませておく意味もある。
+//
+// 部屋を分ける (分室): WebRTC は全員どうしで張るので、1 つの部屋に N 人いると
+// 1 台あたり N-1 本、全体で N(N-1)/2 本の接続になる。人が集まった瞬間にスマホの
+// CPU と回線が先に尽きて対戦どころではなくなるので、最初の部屋 (mk-presence) が
+// PRESENCE_SPLIT_AT 人を超えたら、トップ画面の人は ID で決まる分室へ移る。
+// 対戦待ちの人は最初の部屋と全分室に入るので、どこにいる人からも見え、待っている
+// 人どうしも互いに見える (合流の maybeMergeLobby が効く)。代わりにトップ画面の人数は
+// 自分の部屋の分しか数えない。接続数は 1 台あたりおおよそ
+//   トップ画面: PRESENCE_SPLIT_AT + N / PRESENCE_SHARDS + 対戦待ちの人数
+//   対戦待ち: N (待っている間だけ)
+// 分室を増やすと、対戦待ちの人が入る部屋ごとにリレーへの告知が増える
+// (部屋ごとに入室直後の数回 + 60 秒おき)。リレーの流量制限に掛からないよう 4 にしてある。
+// 最初の部屋の名前は以前と同じなので、古い版のページとも互いに見える。
 
 export type PresenceState = 'title' | 'wait' | 'race';
 
@@ -447,46 +614,126 @@ export interface PresenceSummary {
  */
 export const JOIN_MIN_WAIT = 3;
 
+export const PRESENCE_ROOM = 'mk-presence';
+export const PRESENCE_SHARDS = 4;
+/** 最初の部屋にこれより多くいたら分室へ移る */
+export const PRESENCE_SPLIT_AT = 12;
+
+export const shardRoom = (i: number): string => `${PRESENCE_ROOM}-${i}`;
+
+/** ID から分室の番号を決める (全員が同じ計算をするので、同じ ID は同じ分室) */
+export function shardOf(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % PRESENCE_SHARDS;
+}
+
+/** その状態で入っておく presence の部屋。対戦待ちは全部、それ以外は自分の部屋だけ */
+export function presenceRooms(s: PresenceState, home: string): string[] {
+  if (s === 'wait') return [PRESENCE_ROOM, ...Array.from({ length: PRESENCE_SHARDS }, (_, i) => shardRoom(i))];
+  return [home];
+}
+
+/** 最初の部屋が混んできたので分室へ移るか。一度移ったら戻らない (出入りを繰り返さないように) */
+export function shouldSplit(s: PresenceState, home: string, peersInFirstRoom: number): boolean {
+  return s !== 'wait' && home === PRESENCE_ROOM && peersInFirstRoom > PRESENCE_SPLIT_AT;
+}
+
 export class Presence {
-  private room: Room;
+  private rooms = new Map<string, { room: Room; st: MessageAction<JsonValue> }>();
   private peers: Record<string, PresenceInfo> = {};
   private me: PresenceInfo = { s: 'title' };
-  private st: MessageAction<JsonValue>;
+  /** 対戦待ちでないときに入っている部屋 */
+  private home = PRESENCE_ROOM;
   /** 誰かの状態が変わった (表示の更新用) */
   onChange: (() => void) | null = null;
 
   constructor() {
-    this.room = joinRoom({ appId: APP_ID, relayConfig: RELAY_CONFIG, turnConfig }, 'mk-presence');
-    this.st = this.room.makeAction<JsonValue>('st', {
+    this.sync();
+  }
+
+  /** いま入っている部屋 (診断用) */
+  get roomIds(): string[] {
+    return [...this.rooms.keys()];
+  }
+
+  private join(id: string): void {
+    if (this.rooms.has(id)) return;
+    const room = joinRoom({ appId: APP_ID, relayConfig: RELAY_CONFIG, turnConfig }, id);
+    const st = room.makeAction<JsonValue>('st', {
       onMessage: (d, ctx) => {
         const m = d as { s?: string; name?: string; room?: string; deadline?: number } | null;
         const s: PresenceState = m?.s === 'wait' || m?.s === 'race' ? m.s : 'title';
+        // 部屋名と締切は相手の自己申告。表示に使うので長さと値の範囲だけ絞る
+        // (Infinity の締切は「まもなく発走」のまま永遠に残る)
+        const deadline = Number(m?.deadline);
         this.peers[ctx.peerId] = s === 'wait'
-          ? { s, name: String(m?.name ?? '').slice(0, 10), room: String(m?.room ?? ''), deadline: Number(m?.deadline) || 0 }
+          ? {
+            s,
+            name: String(m?.name ?? '').slice(0, 10),
+            room: String(m?.room ?? '').slice(0, 16),
+            deadline: Number.isFinite(deadline) && deadline > 0 ? deadline : 0,
+          }
           : { s };
-        this.onChange?.();
+        this.changed();
       },
     });
-    this.room.onPeerJoin = peer => {
+    room.onPeerJoin = peer => {
       // 状態が届くまでは「トップ画面にいる」扱い
       this.peers[peer] ??= { s: 'title' };
-      void this.st.send(this.me as unknown as JsonValue, { target: peer });
-      this.onChange?.();
+      void st.send(this.me as unknown as JsonValue, { target: peer });
+      this.changed();
     };
-    this.room.onPeerLeave = peer => { delete this.peers[peer]; this.onChange?.(); };
+    room.onPeerLeave = () => { this.prune(); this.changed(); };
+    this.rooms.set(id, { room, st });
+  }
+
+  /** 状態に合わせて部屋に出入りする */
+  private sync(): void {
+    const want = new Set(presenceRooms(this.me.s, this.home));
+    for (const id of want) this.join(id);
+    for (const [id, r] of this.rooms) {
+      if (want.has(id)) continue;
+      this.rooms.delete(id);
+      void r.room.leave().catch(() => { /* 切断済み */ });
+    }
+    this.prune();
+  }
+
+  /** どの部屋でも見えなくなった人の状態を捨てる */
+  private prune(): void {
+    const here = this.ids();
+    for (const id of Object.keys(this.peers)) if (!here.has(id)) delete this.peers[id];
+  }
+
+  private changed(): void {
+    const first = this.rooms.get(PRESENCE_ROOM);
+    if (first && shouldSplit(this.me.s, this.home, Object.keys(first.room.getPeers()).length)) {
+      this.home = shardRoom(shardOf(selfId));
+      this.sync();
+    }
+    this.onChange?.();
+  }
+
+  /** 入っている部屋のどこかで見えている人 (自分以外) */
+  private ids(): Set<string> {
+    const out = new Set<string>();
+    for (const { room } of this.rooms.values()) for (const id of Object.keys(room.getPeers())) out.add(id);
+    return out;
   }
 
   /** 自分の状態を全員へ知らせる */
   set(info: PresenceInfo): void {
     this.me = info;
-    void this.st.send(info as unknown as JsonValue);
-    this.onChange?.();
+    this.sync();
+    for (const { st } of this.rooms.values()) void st.send(info as unknown as JsonValue);
+    this.changed();
   }
 
   summary(now = Date.now()): PresenceSummary {
     const rooms: Record<string, WaitingRoom> = {};
     let title = 0, racing = 0, others = 0;
-    for (const id of Object.keys(this.room.getPeers())) {
+    for (const id of this.ids()) {
       const p = this.peers[id] ?? { s: 'title' };
       others++;
       if (p.s === 'wait' && p.room && (!p.deadline || p.deadline > now)) {
@@ -510,6 +757,7 @@ export class Presence {
   }
 
   leave(): void {
-    void this.room.leave().catch(() => { /* 切断済み */ });
+    for (const { room } of this.rooms.values()) void room.leave().catch(() => { /* 切断済み */ });
+    this.rooms.clear();
   }
 }

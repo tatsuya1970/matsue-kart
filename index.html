@@ -160,6 +160,8 @@
     #presenceSub { font-size: 13px; opacity: .7; }
     /* アプリ内ブラウザへの注意 (Facebook / LINE 等で開いたときだけ出す) */
     #browserHint { margin-top: 8px; font-size: 13px; color: #ffd83d; line-height: 1.6; }
+    /* 中継が止まっているときの案内 (1 日の上限に達した等。src/main.ts の updateOnlineAvailability) */
+    #turnAlert { margin: 10px auto 0; padding: 9px 16px; border-radius: 12px; background: rgba(255,120,80,.18); border: 1px solid rgba(255,140,100,.6); color: #ffd0b8; font-size: 14px; line-height: 1.6; }
     @keyframes pulse { 50% { opacity: .35; } }
     #results { display: none; }
     #results table { margin: 0 auto 20px; border-collapse: collapse; font-size: 20px; }
@@ -178,6 +180,12 @@
     #tBrake { right: 122px; bottom: 22px; width: 64px; height: 64px; font-size: 22px; }
     #tItem { right: 32px; bottom: 128px; width: 64px; height: 64px; font-size: 26px; }
     .keys.touchKeys { display: none; }
+    /* WebGL のコンテキストが失われたときの案内 (src/main.ts の watchContextLoss) */
+    #glLost { position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 16px; background: rgba(5,10,20,.94); color: #fff; font-size: 17px; text-align: center; }
+    #glLost button { font-size: 18px; font-weight: 800; padding: 10px 32px; border: 0; border-radius: 10px; background: #ffd83d; color: #111; cursor: pointer; }
+    /* 通信の許可と、外部に伝わる情報の説明 (src/main.ts の startNet) */
+    #netPrivacy { margin-top: 10px; font-size: 12px; line-height: 1.55; opacity: .72; }
+    #presenceOptIn, #netRevoke { margin-top: 8px; }
     #rotateHint { display: none; margin-top: 14px; font-size: 14px; color: #ffd83d; }
     @media (pointer: coarse) {
       #touch { display: block; }
@@ -256,8 +264,11 @@
       <div id="onlineHome">
         <div class="row"><label for="playerName" data-en="Your name">対戦での なまえ</label> <input id="playerName" maxlength="10" placeholder="なまえ" data-en-placeholder="name" /></div>
         <div id="netNote" data-en-html="<b>ONLINE PLAY</b> puts you in a lobby. <b>Once two players are in, a 30-second countdown starts</b> and the race begins. Up to 8 players; empty seats are filled by AI. A jingle plays when an opponent arrives. Browser-to-browser connection, no server."><b>対戦PLAY</b> を押すとロビーに入ります。<b>2 人そろうと 30 秒のカウントダウン</b>が始まり、発走します。最大 8 人、空いた枠は AI が走ります。相手が来ると音で知らせます。通信はブラウザ同士の直接接続です（サーバーはありません）。</div>
-        <div id="presence" class="checking"><span class="pdot"></span><span id="presenceMain" data-en="Checking whether anyone is waiting...">対戦待ちの人がいるか確認しています...</span><div id="presenceSub"></div></div>
+        <div id="presence" class="checking"><span class="pdot"></span><span id="presenceMain" data-en="Checking whether anyone is waiting...">対戦待ちの人がいるか確認しています...</span><div id="presenceSub"></div><button id="presenceOptIn" style="display:none" data-en="Show who is waiting">対戦待ちの人を表示する</button></div>
         <div id="browserHint" style="display:none"></div>
+        <div id="turnAlert" style="display:none" role="status"></div>
+        <div id="netPrivacy" data-en-html="Showing who is waiting and <b>ONLINE PLAY</b> connect you directly to other players&#39; browsers through public relays (nostr). Your IP address becomes visible to the players you connect to, the relay operators and the STUN / TURN servers used to connect, and the name you enter is shown to other players. Nothing is sent until you allow it.">対戦待ちの表示と<b>対戦PLAY</b> では、公開リレー（nostr）を通じて他のプレイヤーのブラウザと直接接続します。このとき、あなたの IP アドレスが接続相手・リレーの運営者・接続用の STUN / TURN サーバーに伝わり、入力した名前は相手に表示されます。許可するまでこれらの通信は行いません。</div>
+        <button id="netRevoke" style="display:none" data-en="Stop connecting">通信の許可を取り消す</button>
         <!--
           合言葉で部屋を作る方式は、公開ロビーに切り替えたので隠してあります。
           同時に遊ぶ人が少ないうちは、待ち時間が読めるほうが遊びやすいためです。
@@ -315,6 +326,7 @@
     <div class="credit" data-en-html='3D city model: MLIT Project PLATEAU, "3D City Model (Project PLATEAU) Matsue City (FY2024)", adapted (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>) — Matsue Castle LOD3, buildings LOD2 (aerial-photo textures) and LOD1, roads, terrain<br />Route planning, railway alignments and park outlines: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)<br /><span style="opacity:.7">Not affiliated with Nintendo</span>'>3D都市モデル: 国土交通省 PLATEAU「3D都市モデル（Project PLATEAU）松江市（2024年度）」を加工して作成 (<a href="https://creativecommons.org/licenses/by/4.0/deed.ja" target="_blank" rel="noopener">CC BY 4.0</a>) / 松江城天守 LOD3・建築物 LOD2 (実写テクスチャ)・LOD1・道路・地形を使用<br />ルートの下書き・一畑電車と JR 山陰本線の線形・公園の輪郭: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)<br /><span style="opacity:.7">本作品は任天堂株式会社とは関係がありません</span></div>
     <div id="buildInfo"></div>
   </div>
+  <div id="glLost"><div id="glLostMsg"></div><button id="glLostBtn"></button></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -5,10 +5,12 @@
 import * as THREE from 'three';
 import railData from '../data/rail.json';
 import { llToXZ, assetUrl, rng } from './geo';
+import { fetchBuffer, fetchJson } from './fetch';
 import type { Terrain } from './terrain';
 import type { Track } from './track';
 import { makeSignTexture } from './textures';
 import { isJa } from './i18n';
+import { loadTexture } from './texture';
 
 type LandmarkInfo = { name: string; lat: number; lon: number; headingDeg: number; excludeRadius: number };
 const LM = (railData as any).landmarks as Record<string, LandmarkInfo>;
@@ -48,19 +50,19 @@ interface CastleMeta {
  */
 export async function loadMatsueCastle(): Promise<THREE.Group> {
   const g = new THREE.Group();
-  const meta: CastleMeta = await (await fetch(assetUrl('data/castle.json'))).json();
-  const buf = await (await fetch(assetUrl('data/castle.bin'))).arrayBuffer();
+  const meta = await fetchJson<CastleMeta>(assetUrl('data/castle.json'));
   const n = meta.vertexCount;
+  // 位置 3 + UV 2 + 色 3 の float32
+  const buf = await fetchBuffer(assetUrl('data/castle.bin'), n * 8 * 4);
   const pos = new Float32Array(buf, 0, n * 3);
   const uv = new Float32Array(buf, n * 3 * 4, n * 2);
   const col = new Float32Array(buf, n * 5 * 4, n * 3);
-  const loader = new THREE.TextureLoader();
   await Promise.all(meta.groups.map(async grp => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(grp.start * 3, (grp.start + grp.count) * 3), 3));
     let mat: THREE.Material;
     if (grp.texture) {
-      const tex = await loader.loadAsync(assetUrl(`data/${grp.texture}`));
+      const tex = await loadTexture(assetUrl(`data/${grp.texture}`));
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.flipY = false; // UV 側で上下を反転済み
       tex.anisotropy = 8;

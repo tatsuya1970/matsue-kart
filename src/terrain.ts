@@ -1,6 +1,7 @@
 // 地形 (PLATEAU DEM) と地面テクスチャ (PLATEAU 道路面をラスタライズ)
 import * as THREE from 'three';
 import { assetUrl } from './geo';
+import { fetchBuffer, fetchJson } from './fetch';
 
 /** 地面テクスチャへの描き込み (ワールド m → px の倍率 sx, sz を受け取る) */
 export type GroundPaint = (ctx: CanvasRenderingContext2D, sx: number, sz: number) => void;
@@ -195,9 +196,11 @@ export class Terrain {
 }
 
 export async function loadTerrain(onProgress?: (p: number) => void): Promise<Terrain> {
-  const meta: TerrainMeta = await (await fetch(assetUrl('data/terrain.json'))).json();
+  const meta = await fetchJson<TerrainMeta>(assetUrl('data/terrain.json'));
   onProgress?.(0.5);
-  const buf = await (await fetch(assetUrl('data/terrain.bin'))).arrayBuffer();
+  // 標高は int16 で w × h 個。足りなければ途中で切れたか、json と版が違う
+  const bytes = meta.w * meta.h * 2;
+  const buf = await fetchBuffer(assetUrl('data/terrain.bin'), bytes);
   onProgress?.(1);
-  return new Terrain(meta, new Int16Array(buf));
+  return new Terrain(meta, new Int16Array(buf, 0, meta.w * meta.h));
 }

@@ -1,0 +1,40 @@
+# TURN の資格情報を発行する Worker (worker.js の冒頭に説明)。3 サイトで 1 つを共有する
+name = "citykart-turn"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+[vars]
+# 呼び出しを許可するサイトの Origin (カンマ区切り)
+ALLOWED_ORIGINS = "https://matsue.citykart.jp,https://fukuyama.citykart.jp,https://hiroshima.citykart.jp"
+# 上流の呼び方。metered.ca は GET だけでよいので何も指定しない。
+# Cloudflare の TURN に切り替えるときは次の 2 行のコメントを外す (Bearer 認証の POST。
+# 本文の ttl が資格情報の有効期間 (秒) で、短いほど漏れたときの被害が小さい)
+# TURN_API_METHOD = "POST"
+# TURN_API_BODY = "{\"ttl\":7200}"
+# 1 日 (日本時間) に上流へ資格情報を発行してもらう回数の上限。達した日は 503 を返し、
+# サイト側は対戦PLAY を出さない (翌日 0 時に戻る)。通常は「通信を許可した人のページ表示 1 回 = 1 回」
+# (独自ドメインでキャッシュが効いていれば 1 分に 1 回まで)。資格情報を大量に取られて枠が一気に
+# 尽きるのを防ぐためのもので、転送量の上限は上流のプランで決まる。"0" で無効。いまの数は GET /status
+DAILY_CAP = "500"
+
+# secret は wrangler secret put で入れる (ここには書かない):
+#   TURN_API_URL    metered.ca の資格情報を返す URL (?apiKey=<資格情報の API キー>。Secret key ではない)
+#                   (Cloudflare の TURN なら https://rtc.live.cloudflare.com/v1/turn/keys/<TURN Key ID>/credentials/generate-ice-servers)
+#   TURN_API_TOKEN  Cloudflare の TURN のときだけ: TURN Key の API トークン
+
+# 1 つの IP から 1 分に呼べる回数。無料プランでデプロイできなければこの節を消す
+# (Worker 側は RATE_LIMITER が無くても動く)
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }
+
+# 1 日の発行数を数える Durable Object (worker.js の DailyCounter)。
+# 無料プランでは SQLite 方式 (new_sqlite_classes) だけ使える
+[[durable_objects.bindings]]
+name = "DAILY_COUNTER"
+class_name = "DailyCounter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DailyCounter"]

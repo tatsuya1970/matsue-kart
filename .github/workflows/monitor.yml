@@ -1,0 +1,26 @@
+name: Monitor production
+
+# 本番の外形監視。配信物が揃っているかと、対戦のシグナリングに使う nostr リレーに
+# つながるかを定期的に見る。失敗すると GitHub から通知が届く (Actions の失敗通知)。
+# リポジトリに 60 日動きが無いと、GitHub は定期実行を自動で止めるので注意。
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: node tools/check_site.mjs https://matsue.citykart.jp/ --relays

@@ -2,7 +2,9 @@
 import * as THREE from 'three';
 import { atlasFile, type QualityPreset } from './quality';
 import { assetUrl } from './geo';
+import { fetchBuffer, fetchJson } from './fetch';
 import { t } from './i18n';
+import { loadTexture } from './texture';
 
 export interface Lod2Meta {
   vertexCount: number;
@@ -13,21 +15,21 @@ export interface Lod2Meta {
 }
 
 export async function loadLod2(preset: QualityPreset, onProgress?: (p: number, label?: string) => void): Promise<{ group: THREE.Group; meta: Lod2Meta; triangles: number }> {
-  const meta: Lod2Meta = await (await fetch(assetUrl('data/lod2.json'))).json();
+  const meta = await fetchJson<Lod2Meta>(assetUrl('data/lod2.json'));
   onProgress?.(0.1, t('load.lod2Shape'));
-  const buf = await (await fetch(assetUrl('data/lod2.bin'))).arrayBuffer();
   const n = meta.vertexCount;
+  // 位置 3 + UV 2 の float32
+  const buf = await fetchBuffer(assetUrl('data/lod2.bin'), n * 5 * 4);
   const pos = new Float32Array(buf, 0, n * 3);
   const uv = new Float32Array(buf, n * 3 * 4, n * 2);
 
-  const loader = new THREE.TextureLoader();
   const group = new THREE.Group();
   let loaded = 0;
   const jobs = meta.groups.map(async g => {
     if (g.count === 0) return;
     const name = meta.atlases[g.atlas];
     // 低画質時は 2048px 版を使う。未生成の環境では元の 4096px に戻す
-    const load = (f: string) => new Promise<THREE.Texture>((res, rej) => loader.load(assetUrl(`data/${f}`), res, undefined, rej));
+    const load = (f: string) => loadTexture(assetUrl(`data/${f}`));
     const tex = await load(atlasFile(name, preset)).catch(e => {
       if (!preset.halfAtlas) throw e;
       console.warn(`${atlasFile(name, preset)} が無いので ${name} を使います (npm run data:lq で生成できます)`);
