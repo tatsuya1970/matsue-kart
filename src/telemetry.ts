@@ -53,6 +53,16 @@ export function report(kind: Kind, event: string, data: Record<string, unknown> 
   } catch { /* 記録の失敗でゲームを止めない */ }
 }
 
+/** URL からクエリとフラグメントを除く (URL でなければそのまま) */
+export function stripQuery(u: string): string {
+  try {
+    const url = new URL(u);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return u.replace(/[?#].*$/, '');
+  }
+}
+
 const errorData = (e: unknown): Record<string, unknown> => {
   if (e instanceof Error) return { message: e.message.slice(0, 300), name: e.name, stack: (e.stack ?? '').slice(0, 1500) };
   return { message: String(e).slice(0, 300) };
@@ -68,7 +78,8 @@ export function installErrorHandlers(): void {
     // スクリプトや画像の読み込み失敗は ErrorEvent ではなく、target が要素になる
     const target = e.target as HTMLElement | null;
     if (target && target !== (window as unknown as HTMLElement) && 'src' in target) {
-      report('load', 'resource', { message: String((target as HTMLScriptElement).src) });
+      // 送るのは場所 (オリジン + パス) だけ。クエリやフラグメントに鍵が付いていても送らない
+      report('load', 'resource', { message: stripQuery(String((target as HTMLScriptElement).src)) });
       return;
     }
     report('error', 'uncaught', { ...errorData(e.error ?? e.message), where: `${e.filename}:${e.lineno}:${e.colno}` });

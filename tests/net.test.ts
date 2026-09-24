@@ -177,3 +177,80 @@ describe('sanitizeLobby', () => {
     expect(net.sanitizeLobby({ order: ['a'], names: {}, seed: 1, deadline: -5 }, 42).deadline).toBe(0);
   });
 });
+
+describe('攻撃者のページを想定した検査 (2 回目の指摘)', () => {
+  const order = ['a', 'b'];
+  const host = 'a';
+  const pose = (over: Partial<Record<number, number>> = {}) => {
+    const p = [1, 10, 20, 3, 0.5, 30, 0, 0, 1, 100, 0, 0];
+    for (const [i, v] of Object.entries(over)) p[Number(i)] = v as number;
+    return p;
+  };
+  it('有限でも極端な位置・速度・周回数は捨てる', () => {
+    expect(net.parsePoses(pose(), 'b', order, host)).toHaveLength(1);
+    expect(net.parsePoses([0, 1e308, 1e308, 1e308, 1e308, 1e308, 1e308, 1e308, 1e308, 1e308, 1e308, 1e308], 'a', order, host)).toEqual([]);
+    expect(net.parsePoses(pose({ 1: 1e9 }), 'b', order, host)).toEqual([]);     // x
+    expect(net.parsePoses(pose({ 5: 5000 }), 'b', order, host)).toEqual([]);    // speed
+    expect(net.parsePoses(pose({ 8: 999 }), 'b', order, host)).toEqual([]);     // lap
+    expect(net.parsePoses(pose({ 8: 1.5 }), 'b', order, host)).toEqual([]);     // lap は整数
+    expect(net.parsePoses(pose({ 11: 1e6 }), 'b', order, host)).toEqual([]);    // star
+    expect(net.parsePoses(pose({ 7: -0.016 }), 'b', order, host)).toHaveLength(1);  // スピンが終わった直後の少しマイナスは正常
+    expect(net.parsePoses(pose({ 6: 5 }), 'b', order, host)).toEqual([]);       // drifting は -1..1
+  });
+  it('ゴールタイムは 1 分〜1 時間だけ、アイテムの位置と速度も範囲内だけ', () => {
+    expect(net.parseEvent({ t: 'fin', slot: 1, time: 0 }, 'b', order, host)).toBeNull();
+    expect(net.parseEvent({ t: 'fin', slot: 1, time: 30 }, 'b', order, host)).toBeNull();
+    expect(net.parseEvent({ t: 'fin', slot: 1, time: 5000 }, 'b', order, host)).toBeNull();
+    expect(net.parseEvent({ t: 'fin', slot: 1, time: 400 }, 'b', order, host)).not.toBeNull();
+    const use = { t: 'use', slot: 1, item: 'shell', x: 1, z: 2, y: 3, heading: 0.1, speed: 30 };
+    expect(net.parseEvent({ ...use, x: 1e308 }, 'b', order, host)).toBeNull();
+    expect(net.parseEvent({ ...use, speed: 1e308 }, 'b', order, host)).toBeNull();
+    expect(net.parseEvent({ ...use, heading: 1e308 }, 'b', order, host)).toBeNull();
+  });
+  it('対戦待ちの部屋名は公開ロビーの形 (OPEN + 5 文字) だけ受け入れる', () => {
+    expect(net.isOpenCode(net.newOpenCode())).toBe(true);
+    expect(net.isOpenCode('OPENABCDE')).toBe(true);
+    expect(net.isOpenCode('ATTACKER_ROOM')).toBe(false);
+    expect(net.isOpenCode('OPENABCD')).toBe(false);
+    expect(net.isOpenCode('OPEN0O1I2')).toBe(false);   // あいことばに使わない文字
+    expect(net.isOpenCode('openabcde')).toBe(false);
+  });
+  it('turn.json に固定の資格情報が書かれていたら使わない (Worker の短期の資格情報は使う)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () =>
+      new Response('{"iceServers":[{"urls":"turn:t.example:3478","username":"u","credential":"c"}]}', { status: 200 })));
+    expect(await net.loadTurn()).toBe(0);
+    expect(net.turnState()).toBe('error');
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('相手ごとの受信回数の上限 (RateGate)', () => {
+  it('ためておける分までは通し、超えた分は捨て、時間がたつと戻る', () => {
+    const g = new net.RateGate(10, 5);
+    const at = 1000;
+    const got = Array.from({ length: 8 }, () => g.allow('x', at));
+    expect(got.filter(Boolean)).toHaveLength(5);
+    expect(g.allow('x', at + 100)).toBe(true);    // 0.1 秒で 1 つ戻る
+    expect(g.allow('x', at + 100)).toBe(false);
+    expect(g.allow('y', at)).toBe(true);           // 相手ごとに別
+  });
+  it('普段の送信 (位置 15 回/秒) は 1 分続けても捨てない', () => {
+    const g = net.makeGates().pose;
+    let dropped = 0;
+    for (let i = 0; i < 15 * 60; i++) if (!g.allow('p', i * (1000 / 15))) dropped++;
+    expect(dropped).toBe(0);
+  });
+  it('大量に送られたら 1 秒あたりの上限を超えた分を捨てる', () => {
+    const g = net.makeGates().pose;
+    let ok = 0;
+    for (let i = 0; i < 10000; i++) if (g.allow('p', 5000 + i * 0.1)) ok++;   // 1 秒に 1 万通
+    expect(ok).toBeLessThan(100);
+  });
+  it('抜けた相手の記録は消す', () => {
+    const g = new net.RateGate(1, 1);
+    expect(g.allow('x', 0)).toBe(true);
+    expect(g.allow('x', 0)).toBe(false);
+    g.forget('x');
+    expect(g.allow('x', 0)).toBe(true);
+  });
+});

@@ -83,7 +83,18 @@ export async function loadTurn(): Promise<number> {
     return 0;
   }
   const asObj = cfg as { url?: unknown; iceServers?: unknown } | null;
-  if (asObj && typeof asObj.url === 'string') {
+  const fromApi = !!asObj && typeof asObj.url === 'string';
+  if (!fromApi) {
+    // turn.json に固定の資格情報がそのまま書かれていたら使わない。配信物は誰でも読めるので、
+    // 使えば第三者に中継を使われる。デプロイ前の検査 (tools/prepare_turn_config.mjs) を
+    // 通さずに置かれた場合の保険。資格情報 API (Worker) が返す短期の資格情報はこの対象外
+    const direct = Array.isArray(cfg) ? cfg : (cfg as { iceServers?: unknown })?.iceServers;
+    if (Array.isArray(direct) && direct.some(s => s && typeof s === 'object' && ('username' in s || 'credential' in s))) {
+      turnStatus = 'error';
+      return 0;
+    }
+  }
+  if (fromApi && asObj && typeof asObj.url === 'string') {
     try {
       cfg = await fetchJson<unknown>(asObj.url, { timeoutMs: 3000, retries: 0 });
     } catch (e) {
@@ -259,10 +270,64 @@ export function parsePoses(d: unknown, sender: string, order: string[], host: st
   const out: Pose[] = [];
   for (let i = 0; i < d.length; i += POSE_LEN) {
     const p = unpackPose(d as number[], i);
-    if (slotOwner(order, host, p.slot) === sender) out.push(p);
+    if (slotOwner(order, host, p.slot) === sender && poseInRange(p)) out.push(p);
   }
   return out;
 }
+
+/** 座標の上限 (m)。地形はコースの周り十数 km なので十分に広い */
+const WORLD = 50_000;
+const within = (v: number, lo: number, hi: number) => v >= lo && v <= hi;
+
+/**
+ * 値がありえる範囲か。有限でも 1e308 のような値は、受け取った側の補間で Infinity になり
+ * カートが消えたり順位が崩れたりする。上限はゲームの実際の値より十分に広くとってある
+ * (向きは周回ごとに増え続けるので広め、タイマー類は数秒、速度は最高速 56 m/s の数倍)。
+ */
+export function poseInRange(p: Pose): boolean {
+  return within(p.x, -WORLD, WORLD) && within(p.z, -WORLD, WORLD) && within(p.y, -5000, 5000)
+    && within(p.heading, -1e5, 1e5) && within(p.speed, -200, 200) && within(p.drifting, -1, 1)
+    // タイマー類は 0 付近で少しマイナスになることがある (スピンの残り時間は終わる瞬間に
+    // 負になり、次に当たるまでそのまま)。受け取る側は大きいほうを採るだけなので負も通す
+    && within(p.spin, -30, 30) && within(p.boost, -30, 30) && within(p.star, -30, 30)
+    && Number.isInteger(p.lap) && within(p.lap, 0, 20) && within(p.s, -1e6, 1e6);
+}
+
+/**
+ * 相手ごとの受信回数の上限 (トークンバケット)。正しい値でも大量に送られると、受け取った側で
+ * カートの更新や画面の描き直しが回り続ける。挨拶 (hi) はホストが座席表を全員へ配り直す
+ * きっかけなので、1 通が全員への送信に増幅される。上限を超えた分は黙って捨てる。
+ * 通信量そのものと、通信ライブラリが中身を読む手間は、受け取る側では防げない。
+ */
+export class RateGate {
+  private buckets = new Map<string, { tokens: number; at: number }>();
+  /** @param perSec 1 秒あたりに補充する数  @param burst ためておける上限 */
+  constructor(private perSec: number, private burst: number) {}
+  allow(peer: string, now = performance.now()): boolean {
+    const b = this.buckets.get(peer) ?? { tokens: this.burst, at: now };
+    b.tokens = Math.min(this.burst, b.tokens + (now - b.at) / 1000 * this.perSec);
+    b.at = now;
+    const ok = b.tokens >= 1;
+    if (ok) b.tokens -= 1;
+    this.buckets.set(peer, b);
+    return ok;
+  }
+  forget(peer: string): void {
+    this.buckets.delete(peer);
+  }
+}
+
+/**
+ * 種類ごとの上限。普段の送信は位置が 15 回/秒 (src/main.ts の POSE_HZ)、イベントは
+ * ホストが AI の分もまとめて送るので数回/秒、挨拶と座席表は入退室のたびに数回。
+ * どれも普段の数倍にしてあり、普通に遊んでいて捨てられることはない。
+ */
+const RATES = { pose: [40, 40], ev: [30, 30], hi: [2, 5], lobby: [10, 20], go: [2, 5], busy: [2, 5], st: [5, 10] } as const;
+export const makeGates = () => Object.fromEntries(Object.entries(RATES).map(([k, [r, b]]) => [k, new RateGate(r, b)])) as Record<keyof typeof RATES, RateGate>;
+
+/** ゴールタイムの範囲 (秒)。どのコースでも 1 分より速くは走れない */
+const FIN_MIN = 60;
+const FIN_MAX = 3600;
 
 /** 受信したイベントを検査する。形が違う・持ち主でない席・知らないアイテムは null */
 export function parseEvent(d: unknown, sender: string, order: string[], host: string): NetEvent | null {
@@ -275,10 +340,12 @@ export function parseEvent(d: unknown, sender: string, order: string[], host: st
     case 'hit':
       return { t: 'hit', slot: s };
     case 'fin':
-      return finite(e.time) && e.time >= 0 ? { t: 'fin', slot: s, time: e.time } : null;
+      return finite(e.time) && within(e.time, FIN_MIN, FIN_MAX) ? { t: 'fin', slot: s, time: e.time } : null;
     case 'use':
       if (typeof e.item !== 'string' || !ITEM_TYPES.has(e.item)) return null;
       if (![e.x, e.z, e.y, e.heading, e.speed].every(finite)) return null;
+      if (!within(e.x as number, -WORLD, WORLD) || !within(e.z as number, -WORLD, WORLD) || !within(e.y as number, -5000, 5000)
+        || !within(e.heading as number, -1e5, 1e5) || !within(e.speed as number, -200, 200)) return null;
       return { t: 'use', slot: s, item: e.item, x: e.x as number, z: e.z as number, y: e.y as number, heading: e.heading as number, speed: e.speed as number };
     default:
       return null;
@@ -324,6 +391,15 @@ export const COUNTDOWN_SEC = 30;
  */
 export function newOpenCode(): string {
   return `OPEN${makeRoomCode()}`;
+}
+
+/**
+ * 公開ロビーの部屋名の形か (OPEN + あいことばの 5 文字)。対戦待ちの表示 (presence) で
+ * 届いた部屋名は相手の自己申告なので、この形でなければ使わない。対戦PLAY で入るのは
+ * 公開ロビーだけにして、任意の名前の部屋 (合言葉の部屋など) へ誘導されないようにする。
+ */
+export function isOpenCode(code: string): boolean {
+  return /^OPEN[A-HJ-NP-Z2-9]{5}$/.test(code);
 }
 
 /** create=合言葉で部屋を作った / join=合言葉で参加した / open=公開ロビー */
@@ -408,6 +484,8 @@ export class NetSession {
   private busy: MessageAction<JsonValue>;
   private pose: MessageAction<JsonValue>;
   private ev: MessageAction<JsonValue>;
+  /** 相手ごとの受信回数の上限 (RateGate) */
+  private gates = makeGates();
 
   constructor(code: string, name: string, kind: RoomKind, handlers: NetHandlers) {
     this.code = code;
@@ -420,9 +498,13 @@ export class NetSession {
 
     this.hi = this.room.makeAction<JsonValue>('hi', {
       onMessage: (d, ctx) => {
+        if (!this.gates.hi.allow(ctx.peerId)) return;
         const msg = d as { name?: string; creator?: boolean };
         this.names[ctx.peerId] = String(msg?.name ?? '???').slice(0, 10);
-        this.creators[ctx.peerId] = !!msg?.creator;
+        // 「部屋を作った」は相手の自己申告。公開ロビーには作った人がいないので聞かない
+        // (聞くと、改造したページが作成者を名乗るだけでホストを奪える)。
+        // 合言葉の部屋 (?room=) では作った人をホストにするために使う
+        if (this.kind !== 'open') this.creators[ctx.peerId] = !!msg?.creator;
         // レース中に来た人には席を用意できない。そう伝えて別の部屋へ行ってもらう
         // (伝えないと、相手は誰も来ないロビーで待ち続ける)
         if (this.started) { void this.busy.send({}, { target: ctx.peerId }); return; }
@@ -433,6 +515,7 @@ export class NetSession {
     });
     this.lobby = this.room.makeAction<JsonValue>('lobby', {
       onMessage: (d, ctx) => {
+        if (!this.gates.lobby.allow(ctx.peerId)) return;
         const raw: unknown = d;
         if (!acceptLobby(ctx.peerId, this.host, raw)) return;
         const info = sanitizeLobby(raw, this.seed);
@@ -445,20 +528,25 @@ export class NetSession {
     });
     this.go = this.room.makeAction<JsonValue>('go', {
       // 発走の合図もホストからだけ受ける (食い違ったホストの合図で走り出さないように)
-      onMessage: (_, ctx) => { if (ctx.peerId === this.host && !this.started) { this.started = true; handlers.onStart(); } },
+      onMessage: (_, ctx) => { if (this.gates.go.allow(ctx.peerId) && ctx.peerId === this.host && !this.started) { this.started = true; handlers.onStart(); } },
     });
     this.busy = this.room.makeAction<JsonValue>('busy', {
-      onMessage: () => { if (!this.started && this.mySlot < 0) handlers.onBusy(); },
+      // 「レース中なので入れない」はホストからだけ受ける。誰からでも受けると、同じ部屋の
+      // 改造したページが送るだけで、相手を別の部屋へ移し続けられる。レース中の部屋では
+      // 全員が busy を返すので、ホストの分も必ず届く
+      onMessage: (_, ctx) => { if (this.gates.busy.allow(ctx.peerId) && ctx.peerId === this.host && !this.started && this.mySlot < 0) handlers.onBusy(); },
     });
     // 位置もイベントも、その席の持ち主から届いたものだけを受け入れる (slotOwner)
     this.pose = this.room.makeAction<JsonValue>('pose', {
       onMessage: (d, ctx) => {
+        if (!this.gates.pose.allow(ctx.peerId)) return;
         const out = parsePoses(d, ctx.peerId, this.order, this.host);
         if (out.length) handlers.onPose(out);
       },
     });
     this.ev = this.room.makeAction<JsonValue>('ev', {
       onMessage: (d, ctx) => {
+        if (!this.gates.ev.allow(ctx.peerId)) return;
         const e = parseEvent(d, ctx.peerId, this.order, this.host);
         if (e) handlers.onEvent(e);
       },
@@ -470,7 +558,8 @@ export class NetSession {
       handlers.onPeers();
       if (this.isHost) this.publishLobby();
     };
-    this.room.onPeerLeave = () => {
+    this.room.onPeerLeave = peer => {
+      for (const g of Object.values(this.gates)) g.forget(peer);
       handlers.onPeers();
       // ホストが抜けたら ID 順で次の人がホストになる
       if (this.isHost) this.publishLobby();
@@ -641,6 +730,8 @@ export function shouldSplit(s: PresenceState, home: string, peersInFirstRoom: nu
 
 export class Presence {
   private rooms = new Map<string, { room: Room; st: MessageAction<JsonValue> }>();
+  /** 相手ごとの状態通知の上限 (RateGate)。部屋をまたいで共通 */
+  private stGate = new RateGate(RATES.st[0], RATES.st[1]);
   private peers: Record<string, PresenceInfo> = {};
   private me: PresenceInfo = { s: 'title' };
   /** 対戦待ちでないときに入っている部屋 */
@@ -662,6 +753,7 @@ export class Presence {
     const room = joinRoom({ appId: APP_ID, relayConfig: RELAY_CONFIG, turnConfig }, id);
     const st = room.makeAction<JsonValue>('st', {
       onMessage: (d, ctx) => {
+        if (!this.stGate.allow(ctx.peerId)) return;
         const m = d as { s?: string; name?: string; room?: string; deadline?: number } | null;
         const s: PresenceState = m?.s === 'wait' || m?.s === 'race' ? m.s : 'title';
         // 部屋名と締切は相手の自己申告。表示に使うので長さと値の範囲だけ絞る
@@ -671,7 +763,7 @@ export class Presence {
           ? {
             s,
             name: String(m?.name ?? '').slice(0, 10),
-            room: String(m?.room ?? '').slice(0, 16),
+            room: isOpenCode(String(m?.room ?? '')) ? String(m?.room) : '',
             deadline: Number.isFinite(deadline) && deadline > 0 ? deadline : 0,
           }
           : { s };

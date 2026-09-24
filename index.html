@@ -184,6 +184,17 @@
     #rankList .nm { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #rankList .tm { font-variant-numeric: tabular-nums; }
     #rankEmpty { font-size: 14px; opacity: .7; }
+    /* トップ画面のランキング (src/ranking.ts の setupRankingButton) */
+    #rankOpen { margin-top: 12px; }
+    #overlay #rankOpenBtn { font-size: 16px; font-weight: 800; padding: 9px 26px; border-radius: 22px; background: rgba(255,216,61,.14); border: 1px solid rgba(255,216,61,.65); color: #ffd83d; box-shadow: none; }
+    #topRank { margin: 10px auto 0; width: min(420px, 100%); padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.18); }
+    #topRank .rankTitle { font-size: 16px; font-weight: 800; color: #ffd83d; margin-bottom: 6px; }
+    #topRankList { list-style: none; margin: 0; padding: 0; font-size: 15px; }
+    #topRankList li { display: flex; gap: 12px; padding: 3px 10px; border-radius: 8px; }
+    #topRankList .rk { width: 2em; text-align: right; opacity: .8; }
+    #topRankList .nm { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #topRankList .tm { font-variant-numeric: tabular-nums; }
+    #topRankEmpty, #topRankMsg { font-size: 14px; opacity: .7; }
     /* ---- タッチ操作 (スマホ / タブレット) ----
        指を置いたまま隣のボタンへ滑らせても効くよう、#touch は画面全面で触れられ、
        src/input.ts が座標からボタンを引く。ボタンは #pads に置き、安全領域のぶん内側に寄せる。 */
@@ -282,6 +293,13 @@
     <div id="mainButtons">
       <button id="startBtn" disabled data-en="Loading...">読み込み中...</button>
       <button id="openBtn" disabled data-en="ONLINE PLAY">対戦PLAY</button>
+    </div>
+    <div id="rankOpen" style="display:none"><button id="rankOpenBtn" data-en="🏆 Ranking">🏆 ランキング</button></div>
+    <div id="topRank" style="display:none">
+      <div class="rankTitle" data-en="Ranking (top 20)">ランキング（上位 20）</div>
+      <div id="topRankMsg"></div>
+      <ol id="topRankList"></ol>
+      <div id="topRankEmpty" style="display:none" data-en="No records yet">まだ記録がありません</div>
     </div>
     <div id="rotateHint" data-en="📱 Turn your phone sideways for a wider view">📱 スマホを横向きにすると見やすくなります</div>
     <div id="progress"><div id="progressBar"></div></div>

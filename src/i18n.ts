@@ -146,6 +146,7 @@ const JA: Dict = {
   'rank.doneOut': '登録しました (上位 100 位には入りませんでした)',
   'rank.failed': '登録できませんでした。もう一度押してください',
   'rank.loadFailed': 'ランキングを読み込めませんでした',
+  'rank.loading': '読み込み中...',
   'rank.ngName': 'その名前は使えません。別の名前を入れてください',
 
   'lang.other': 'English',
@@ -235,6 +236,7 @@ const EN: Dict = {
   'rank.doneOut': 'Submitted (outside the top 100)',
   'rank.failed': 'Could not submit. Please try again',
   'rank.loadFailed': 'Could not load the ranking',
+  'rank.loading': 'Loading...',
   'rank.ngName': 'That name is not allowed. Please choose another',
 
   'lang.other': '日本語',

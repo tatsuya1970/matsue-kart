@@ -57,3 +57,11 @@ describe('fetchBlob', () => {
     await expect(fetchBlob('stalled.jpg', { timeoutMs: 20, retries: 0 })).rejects.toThrow(/timeout/);
   });
 });
+
+describe('テレメトリ', () => {
+  it('読み込みに失敗した URL はクエリとフラグメントを除いて送る', async () => {
+    const { stripQuery } = await import('../src/telemetry');
+    expect(stripQuery('https://x.example/a/b.png?token=secret#frag')).toBe('https://x.example/a/b.png');
+    expect(stripQuery('/assets/x.js?v=1')).toBe('/assets/x.js');
+  });
+});

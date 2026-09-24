@@ -6,7 +6,7 @@ import { buildBuildings, type BuildingsData } from './buildings';
 import { Kart, type RacerDef, type ItemType } from './kart';
 import { ItemSystem } from './items';
 import { NetSession, Presence, turnConfigured, newOpenCode, normalizeRoomCode, relayStatus, loadTurn, hasTurn, turnState, natProbe, inAppBrowser, COUNTDOWN_SEC, type LobbyInfo, type NetEvent, type NatKind, type Pose, type RoomKind } from './net';
-import { showRanking, eligibleRun } from './ranking';
+import { showRanking, eligibleRun, setupRankingButton } from './ranking';
 import { Hud, drawCourseMap } from './hud';
 import { InputManager } from './input';
 import { AudioSystem } from './audio';
@@ -380,6 +380,7 @@ async function main() {
   report('load', 'ready', { ms: Math.round(performance.now()) });
   startBtn.disabled = false;
   startBtn.textContent = t('btn.solo');
+  setupRankingButton();   // トップ画面のランキングのボタン
   const turnAlert = document.getElementById('turnAlert')!;
   const updateOnlineAvailability = () => {
     const ready = turnSettled ? hasTurn() : turnListed;

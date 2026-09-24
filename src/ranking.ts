@@ -66,10 +66,10 @@ export async function submitTime(name: string, time: number): Promise<SubmitResu
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 /** 一覧を描く。名前は textContent で入れる (HTML として解釈させない) */
-function renderList(entries: RankEntry[], mine: string | null): void {
-  const list = byId<HTMLOListElement>('rankList');
+function renderList(entries: RankEntry[], mine: string | null, listId = 'rankList', emptyId = 'rankEmpty', show = SHOW): void {
+  const list = byId<HTMLOListElement>(listId);
   list.replaceChildren();
-  for (const [i, e] of entries.slice(0, SHOW).entries()) {
+  for (const [i, e] of entries.slice(0, show).entries()) {
     const li = document.createElement('li');
     if (e.id === mine) li.className = 'mine';
     const rank = document.createElement('span'); rank.className = 'rk'; rank.textContent = String(i + 1);
@@ -78,7 +78,29 @@ function renderList(entries: RankEntry[], mine: string | null): void {
     li.append(rank, name, time);
     list.append(li);
   }
-  byId('rankEmpty').style.display = entries.length ? 'none' : '';
+  byId(emptyId).style.display = entries.length ? 'none' : '';
+}
+
+/** トップ画面のランキングのボタン。押すと上位 20 件を開き、もう一度押すと閉じる */
+export function setupRankingButton(): void {
+  if (!rankingEnabled()) return;
+  const wrap = byId('rankOpen');
+  const button = byId<HTMLButtonElement>('rankOpenBtn');
+  const panel = byId('topRank');
+  const msg = byId('topRankMsg');
+  wrap.style.display = '';
+  button.onclick = async () => {
+    const open = panel.style.display === 'none';
+    panel.style.display = open ? '' : 'none';
+    if (!open) return;
+    msg.textContent = t('rank.loading');
+    try {
+      renderList(await fetchTop(), null, 'topRankList', 'topRankEmpty', 20);
+      msg.textContent = '';
+    } catch {
+      msg.textContent = t('rank.loadFailed');
+    }
+  };
 }
 
 /**
@@ -96,6 +118,8 @@ export function showRanking(opts: { time: number; name: string; canSubmit: boole
   const button = byId<HTMLButtonElement>('rankSubmit');
   const msg = byId('rankMsg');
   box.style.display = '';
+  byId('rankOpen').style.display = 'none';
+  byId('topRank').style.display = 'none';
   form.style.display = opts.canSubmit ? '' : 'none';
   input.value = opts.name;
   msg.textContent = opts.canSubmit ? t('rank.prompt', formatTime(opts.time)) : '';
