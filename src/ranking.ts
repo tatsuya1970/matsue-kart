@@ -36,6 +36,14 @@ export function cleanName(v: string): string {
   return [...s].slice(0, 10).join('');
 }
 
+/** 登録した日時を見る人の端末の時刻で YYYY/MM/DD HH:mm にする。数でなければ空 */
+export function formatDate(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
   return `${m}:${(sec - m * 60).toFixed(2).padStart(5, '0')}`;
@@ -74,8 +82,9 @@ function renderList(entries: RankEntry[], mine: string | null, listId = 'rankLis
     if (e.id === mine) li.className = 'mine';
     const rank = document.createElement('span'); rank.className = 'rk'; rank.textContent = String(i + 1);
     const name = document.createElement('span'); name.className = 'nm'; name.textContent = e.name;
+    const date = document.createElement('span'); date.className = 'dt'; date.textContent = formatDate(e.at);
     const time = document.createElement('span'); time.className = 'tm'; time.textContent = formatTime(e.time);
-    li.append(rank, name, time);
+    li.append(rank, name, date, time);
     list.append(li);
   }
   byId(emptyId).style.display = entries.length ? 'none' : '';

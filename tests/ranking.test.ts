@@ -5,7 +5,8 @@ vi.stubGlobal('location', new URL('http://localhost/'));
 let cleanName: typeof import('../src/ranking').cleanName;
 let eligibleRun: typeof import('../src/ranking').eligibleRun;
 let formatTime: typeof import('../src/ranking').formatTime;
-beforeAll(async () => ({ cleanName, eligibleRun, formatTime } = await import('../src/ranking')));
+let formatDate: typeof import('../src/ranking').formatDate;
+beforeAll(async () => ({ cleanName, eligibleRun, formatTime, formatDate } = await import('../src/ranking')));
 // Worker の検査もここで行う (JavaScript。vitest は型を見ないのでそのまま読める)
 import { cleanName as workerCleanName, cleanTime, siteOf } from '../workers/turn/worker.js';
 
@@ -28,6 +29,11 @@ describe('ランキング (ページ側)', () => {
   it('タイムを m:ss.ss で出す', () => {
     expect(formatTime(385.2)).toBe('6:25.20');
     expect(formatTime(59.994)).toBe('0:59.99');
+  });
+  it('登録した日時を YYYY/MM/DD HH:mm で出す (端末の時刻)', () => {
+    expect(formatDate(new Date(2026, 8, 24, 19, 5).getTime())).toBe('2026/09/24 19:05');
+    expect(formatDate(NaN)).toBe('');
+    expect(formatDate(0)).toBe('');
   });
 });
 
