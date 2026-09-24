@@ -38,3 +38,15 @@ class_name = "DailyCounter"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DailyCounter"]
+
+# ゴールタイムのランキング (worker.js の Leaderboard)。サイトごとに 1 つ
+[[durable_objects.bindings]]
+name = "LEADERBOARD"
+class_name = "Leaderboard"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Leaderboard"]
+
+# 管理用の削除 (DELETE /ranking) に使う合言葉は secret で入れる:
+#   npx wrangler secret put ADMIN_TOKEN

@@ -140,6 +140,12 @@ const JA: Dict = {
   'item.banana': 'オイル',
   'item.shell': 'ボール',
   'item.star': 'むてき',
+  'rank.prompt': 'タイム {0}。なまえを入れてランキングに登録できます',
+  'rank.sending': '登録しています...',
+  'rank.done': '{0} 位に登録しました!',
+  'rank.doneOut': '登録しました (上位 100 位には入りませんでした)',
+  'rank.failed': '登録できませんでした。もう一度押してください',
+  'rank.loadFailed': 'ランキングを読み込めませんでした',
 
   'lang.other': 'English',
 };
@@ -222,6 +228,12 @@ const EN: Dict = {
   'item.banana': 'Oil',
   'item.shell': 'Ball',
   'item.star': 'Shield',
+  'rank.prompt': 'Your time: {0}. Enter your name to join the ranking',
+  'rank.sending': 'Submitting...',
+  'rank.done': 'You placed #{0}!',
+  'rank.doneOut': 'Submitted (outside the top 100)',
+  'rank.failed': 'Could not submit. Please try again',
+  'rank.loadFailed': 'Could not load the ranking',
 
   'lang.other': '日本語',
 };

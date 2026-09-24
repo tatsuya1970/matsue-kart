@@ -125,18 +125,152 @@ async function dailyStatus(env) {
   return { day: jstDay(), count: r.day === jstDay() ? r.count : 0, cap };
 }
 
+// ---- ランキング (ゴールタイム) ----
+//
+// サイトごと (matsue / fukuyama / hiroshima) に 1 つの Durable Object (Leaderboard) を持ち、
+// 速い順に RANK_KEEP 件だけ残す。サイトは Origin のホスト名の先頭で決める
+// (matsue.citykart.jp → matsue)。ページ側から送るのは名前とタイムだけ。
+//   GET    /ranking            → { entries: 上位 RANK_SHOW 件 }
+//   POST   /ranking {name,time} → { id, rank (RANK_KEEP 位までに入らなければ null), entries }
+//   DELETE /ranking?site=&id=  → 管理用 (Authorization: Bearer <ADMIN_TOKEN>)。不適切な名前や不正な記録を消す
+// 守れること / 守れないこと: カートの物理はブラウザで計算しているので、タイムの正しさは
+// サーバーで確かめられない。改造したページや curl から速いタイムを送ることはできる。
+// ここでできるのは、ありえない速さ (MIN_TIME) の拒否、回数制限、名前の整形、管理用の削除まで。
+
+/** 保存する件数と、返す件数 */
+const RANK_KEEP = 100;
+const RANK_SHOW = 20;
+/**
+ * これより速いタイムは受け付けない (秒)。カートの最高速 56 m/s にコイン・ブースト・むてきを
+ * すべて重ねても毎秒 100 m 程度なので、レース全長 ÷ 100 m/s を目安に切り下げた値。
+ * 松江 9.6 km × 2 周、広島 7.3 km × 2 周、福山 20.8 km の一本道。
+ */
+const MIN_TIME = { matsue: 180, hiroshima: 140, fukuyama: 200 };
+const MAX_TIME = 3600;
+
+/** Origin (https://matsue.citykart.jp) からサイト名 (matsue) を取る */
+export function siteOf(origin) {
+  try {
+    return new URL(origin).hostname.split('.')[0];
+  } catch {
+    return '';
+  }
+}
+
+/** 名前を整える: 文字列にし、制御文字と前後の空白を除き、10 文字 (絵文字も 1 文字) に切る */
+export function cleanName(v) {
+  const bad = c => c < 0x20 || (c >= 0x7f && c <= 0x9f) || (c >= 0x200b && c <= 0x200f) || (c >= 0x2028 && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
+  const s = [...String(v ?? '').normalize('NFC')].filter(ch => !bad(ch.codePointAt(0))).join('').trim();
+  return [...s].slice(0, 10).join('');
+}
+
+/** タイムを検査して 0.01 秒に丸める。範囲外は null */
+export function cleanTime(site, v) {
+  const t = Number(v);
+  if (!Number.isFinite(t) || t < (MIN_TIME[site] ?? 120) || t > MAX_TIME) return null;
+  return Math.round(t * 100) / 100;
+}
+
+/**
+ * サイトごとのランキング。上位 RANK_KEEP 件を 1 つの配列として保存する (件数が少ないので十分)。
+ * DailyCounter と同じく fetch 方式にして、Node でもそのまま動作確認できるようにしてある。
+ *   GET  /top              → { entries }
+ *   POST /add { name, time } → { id, rank, entries }
+ *   POST /delete { id }    → { ok }
+ */
+export class Leaderboard {
+  constructor(state) {
+    this.storage = state.storage;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const list = (await this.storage.get('top')) ?? [];
+    if (request.method === 'POST' && url.pathname === '/add') {
+      const { name, time } = await request.json();
+      const entry = { id: crypto.randomUUID(), name, time, at: Date.now() };
+      // 同じタイムなら先に出した人が上
+      let i = list.findIndex(e => e.time > time);
+      if (i < 0) i = list.length;
+      list.splice(i, 0, entry);
+      const kept = list.slice(0, RANK_KEEP);
+      await this.storage.put('top', kept);
+      return Response.json({ id: entry.id, rank: i < RANK_KEEP ? i + 1 : null, entries: kept.slice(0, RANK_SHOW) });
+    }
+    if (request.method === 'POST' && url.pathname === '/delete') {
+      const { id } = await request.json();
+      const kept = list.filter(e => e.id !== id);
+      await this.storage.put('top', kept);
+      return Response.json({ ok: kept.length !== list.length });
+    }
+    return Response.json({ entries: list.slice(0, RANK_SHOW) });
+  }
+}
+
+function board(env, site) {
+  return env.LEADERBOARD.get(env.LEADERBOARD.idFromName(site));
+}
+
+/** /ranking の処理。origin は許可済み */
+async function handleRanking(request, env, origin, fail) {
+  if (!env.LEADERBOARD) return fail(503, 'ranking is not configured');
+  const site = siteOf(origin);
+  if (request.method === 'GET') {
+    const res = await board(env, site).fetch('https://board/top');
+    return withCors(new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), origin);
+  }
+  if (request.method !== 'POST') return fail(405, 'method not allowed');
+  if (env.RATE_LIMITER) {
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    const { success } = await env.RATE_LIMITER.limit({ key: `rank:${ip}` });
+    if (!success) return fail(429, 'too many requests');
+  }
+  let body;
+  try {
+    body = JSON.parse((await request.text()).slice(0, 1000));
+  } catch {
+    return fail(400, 'bad json');
+  }
+  const name = cleanName(body?.name);
+  const time = cleanTime(site, body?.time);
+  if (!name) return fail(400, 'name required');
+  if (time === null) return fail(400, 'time out of range');
+  const res = await board(env, site).fetch('https://board/add', { method: 'POST', body: JSON.stringify({ name, time }) });
+  return withCors(new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), origin);
+}
+
+/** 管理用の削除。Origin は要らないが ADMIN_TOKEN が要る */
+async function handleRankingDelete(request, env) {
+  const auth = request.headers.get('Authorization') ?? '';
+  if (!env.ADMIN_TOKEN || auth !== `Bearer ${env.ADMIN_TOKEN}`) return text(403, 'forbidden');
+  if (!env.LEADERBOARD) return text(503, 'ranking is not configured');
+  const url = new URL(request.url);
+  const site = url.searchParams.get('site') ?? '';
+  const id = url.searchParams.get('id') ?? '';
+  if (!site || !id) return text(400, 'site and id required');
+  const res = await board(env, site).fetch('https://board/delete', { method: 'POST', body: JSON.stringify({ id }) });
+  return new Response(res.body, { headers: { 'content-type': 'application/json' } });
+}
+
 export default {
   async fetch(request, env, ctx) {
+    const path = new URL(request.url).pathname;
     // 今日の発行数 (監視用。Origin 不要、秘密は出ない)
-    if (request.method === 'GET' && new URL(request.url).pathname === '/status') {
+    if (request.method === 'GET' && path === '/status') {
       return Response.json(await dailyStatus(env), { headers: { 'cache-control': 'no-store' } });
     }
+    if (request.method === 'DELETE' && path === '/ranking') return handleRankingDelete(request, env);
     const origin = request.headers.get('Origin') ?? '';
     if (!allowedOrigins(env).includes(origin)) return text(403, 'forbidden');
     // 許可した Origin への失敗応答には CORS ヘッダーを付ける。付けないとブラウザは
     // 状態コードも本文も読めず、サイト側が「上限に達した」と「つながらない」を区別できない
     const fail = (status, body) => withCors(text(status, body), origin);
-    if (request.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }), origin);
+    if (request.method === 'OPTIONS') {
+      const pre = withCors(new Response(null, { status: 204 }), origin);
+      pre.headers.set('Access-Control-Allow-Methods', 'GET, POST');
+      pre.headers.set('Access-Control-Allow-Headers', 'content-type');
+      return pre;
+    }
+    if (path === '/ranking') return handleRanking(request, env, origin, fail);
     if (request.method !== 'GET') return fail(405, 'method not allowed');
     if (!env.TURN_API_URL) return fail(500, 'TURN_API_URL is not set');
 

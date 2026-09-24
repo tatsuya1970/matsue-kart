@@ -32,6 +32,10 @@ export class InputManager {
   constructor() {
     window.addEventListener('keydown', e => {
       if (e.repeat) return;
+      // 名前の入力欄 (対戦・ランキング) で打った文字をゲームの操作にしない
+      // (M で消音、C でカメラ切替になり、スペースも打てなくなる)
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
       this.keys.add(e.code);
       if (e.code === 'KeyC') this.onCamera?.();
       if (e.code === 'KeyM') this.onMute?.();

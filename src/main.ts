@@ -6,6 +6,7 @@ import { buildBuildings, type BuildingsData } from './buildings';
 import { Kart, type RacerDef, type ItemType } from './kart';
 import { ItemSystem } from './items';
 import { NetSession, Presence, turnConfigured, newOpenCode, normalizeRoomCode, relayStatus, loadTurn, hasTurn, turnState, natProbe, inAppBrowser, COUNTDOWN_SEC, type LobbyInfo, type NetEvent, type NatKind, type Pose, type RoomKind } from './net';
+import { showRanking, eligibleRun } from './ranking';
 import { Hud, drawCourseMap } from './hud';
 import { InputManager } from './input';
 import { AudioSystem } from './audio';
@@ -356,6 +357,13 @@ async function main() {
       return `<tr style="${k.def.isPlayer ? 'color:#ffd83d;font-weight:800' : ''}"><td>${i + 1}</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#${k.def.color.toString(16).padStart(6, '0')}"></span></td><td>${esc(k.def.name)}</td><td>${t}</td></tr>`;
     }).join('');
     results.style.display = 'block';
+    // ゴールタイムのランキング (名前を入れて登録する。src/ranking.ts)
+    if (player.finished) {
+      showRanking({
+        time: player.finishTime, name: nameInput.value, canSubmit: eligibleRun(location.search),
+        onName: n => { nameInput.value = n; storageSet('mk.name', n); },
+      });
+    }
     titleMap.style.display = 'none';   // リザルトではコース図を隠す
     document.getElementById('online')!.style.display = 'none';
     overlay.style.display = 'flex';

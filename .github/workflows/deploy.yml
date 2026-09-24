@@ -61,6 +61,8 @@ jobs:
         env:
           # 例外・読み込み失敗の送り先 (src/telemetry.ts)。リポジトリ変数が無ければ送らない
           VITE_TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
+          # ゴールタイムのランキングの受け口 (src/ranking.ts)。リポジトリ変数が無ければランキングを出さない
+          VITE_RANKING_URL: ${{ vars.RANKING_URL }}
       - name: Check dist
         # データの欠け・.json と .bin の食い違い・JS の参照切れがあれば配信しない
         run: npm run check:dist
