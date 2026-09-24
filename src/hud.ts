@@ -108,7 +108,7 @@ export class Hud {
   private mapScale = 1; private mapOx = 0; private mapOz = 0;
   private landmarkTimer = 0;
   private centerTimer = 0;
-  private rouletteIcons = ['🍄', '🍌', '🐢', '⭐'];
+  private rouletteIcons = ['💨', '🛢️', '🏀', '🛡️'];
 
   constructor(track: Track, laps: number) {
     this.lapTotal.textContent = String(laps);

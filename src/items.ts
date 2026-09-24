@@ -1,4 +1,4 @@
-// アイテムボックス・コイン・バナナ・甲羅
+// アイテムボックス・コイン・オイル・ボール
 import * as THREE from 'three';
 import type { Track } from './track';
 import { Kart, type ItemType } from './kart';
@@ -29,7 +29,7 @@ export class ItemSystem {
   private coinGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.12, 20);
   private coinMat: THREE.Material;
   private shellGeo = new THREE.SphereGeometry(0.55, 14, 10);
-  private shellMat = new THREE.MeshPhongMaterial({ color: 0x2ecc40, shininess: 60 });
+  private shellMat = new THREE.MeshPhongMaterial({ color: 0xff7a1a, shininess: 60 });
   private bananaTemplate: THREE.Group;
   private time = 0;
 
@@ -37,14 +37,14 @@ export class ItemSystem {
     this.boxMat = new THREE.MeshPhongMaterial({ map: makeItemBoxTexture(), transparent: true, opacity: 0.85, shininess: 100, specular: 0xffffff });
     const ct = makeCoinTexture();
     this.coinMat = new THREE.MeshPhongMaterial({ color: 0xffd23f, map: ct, shininess: 90, specular: 0xffffff, emissive: 0x6a4d00 });
-    // バナナ
+    // オイル (後ろに置く油だまり。踏むとスピン)
     this.bananaTemplate = new THREE.Group();
-    const bm = new THREE.MeshPhongMaterial({ color: 0xffe135, shininess: 40 });
-    const arc = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.16, 8, 14, Math.PI * 0.9), bm);
-    arc.rotation.x = Math.PI / 2; arc.rotation.z = Math.PI; arc.position.y = 0.2;
-    this.bananaTemplate.add(arc);
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.3, 6), new THREE.MeshPhongMaterial({ color: 0x5a3b12 }));
-    stem.position.set(-0.55, 0.35, 0); this.bananaTemplate.add(stem);
+    const oil = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.04, 22), new THREE.MeshPhongMaterial({ color: 0x14161a, shininess: 120, specular: 0x8899aa }));
+    oil.position.y = 0.03;
+    this.bananaTemplate.add(oil);
+    const sheen = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.045, 16), new THREE.MeshPhongMaterial({ color: 0x3a3550, shininess: 160, specular: 0xccddff }));
+    sheen.position.set(0.25, 0.035, -0.2);
+    this.bananaTemplate.add(sheen);
     this.bananaTemplate.traverse(o => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
 
     // アイテムボックス列: 周回 8 箇所 x 3 個
@@ -166,7 +166,7 @@ export class ItemSystem {
         }
       }
     }
-    // バナナ
+    // オイル
     for (let i = this.bananas.length - 1; i >= 0; i--) {
       const b = this.bananas[i];
       b.age += dt;
@@ -182,7 +182,7 @@ export class ItemSystem {
       }
       if (hit || b.age > 60) { this.group.remove(b.mesh); this.bananas.splice(i, 1); }
     }
-    // 甲羅
+    // ボール
     for (let i = this.shells.length - 1; i >= 0; i--) {
       const s = this.shells[i];
       s.life -= dt;
@@ -217,5 +217,5 @@ export class ItemSystem {
   }
 }
 
-export const ITEM_ICON: Record<ItemType, string> = { mushroom: '🍄', banana: '🍌', shell: '🐢', star: '⭐' };
+export const ITEM_ICON: Record<ItemType, string> = { mushroom: '💨', banana: '🛢️', shell: '🏀', star: '🛡️' };
 export const ITEM_NAME: Record<ItemType, string> = { mushroom: t('item.mushroom'), banana: t('item.banana'), shell: t('item.shell'), star: t('item.star') };

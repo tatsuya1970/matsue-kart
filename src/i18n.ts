@@ -136,10 +136,10 @@ const JA: Dict = {
   'q.medium': '中 (内蔵GPU向け)',
   'q.low': '低 (最軽量)',
 
-  'item.mushroom': 'キノコ',
-  'item.banana': 'バナナ',
-  'item.shell': 'ミドリこうら',
-  'item.star': 'スター',
+  'item.mushroom': 'ダッシュ',
+  'item.banana': 'オイル',
+  'item.shell': 'ボール',
+  'item.star': 'むてき',
 
   'lang.other': 'English',
 };
@@ -218,10 +218,10 @@ const EN: Dict = {
   'q.medium': 'Medium (integrated GPU)',
   'q.low': 'Low (lightest)',
 
-  'item.mushroom': 'Mushroom',
-  'item.banana': 'Banana',
-  'item.shell': 'Green Shell',
-  'item.star': 'Star',
+  'item.mushroom': 'Dash',
+  'item.banana': 'Oil',
+  'item.shell': 'Ball',
+  'item.star': 'Shield',
 
   'lang.other': '日本語',
 };
