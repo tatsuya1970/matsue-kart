@@ -50,3 +50,17 @@ new_sqlite_classes = ["Leaderboard"]
 
 # 管理用の削除 (DELETE /ranking) に使う合言葉は secret で入れる:
 #   npx wrangler secret put ADMIN_TOKEN
+
+# 本番で起きたことの記録 (worker.js の TelemetryLog)。サイトごとに 1 つ。
+# ページの src/telemetry.ts が POST /telemetry に送り、定期監視 (monitor.yml) が読み出す
+[[durable_objects.bindings]]
+name = "TELEMETRY_LOG"
+class_name = "TelemetryLog"
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TelemetryLog"]
+
+# 定期監視が記録を読むときの合言葉 (GET /telemetry, POST /telemetry/ack)。
+# 各リポジトリの GitHub secret TELEMETRY_TOKEN と同じ値にする:
+#   npx wrangler secret put TELEMETRY_TOKEN

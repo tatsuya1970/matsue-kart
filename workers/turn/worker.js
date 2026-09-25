@@ -32,6 +32,8 @@
 // 許可する Origin と 1 日の上限は wrangler.toml の [vars]。
 // Cloudflare の TURN に切り替えるなら TURN_API_URL を発行 API の URL、TURN_API_TOKEN を
 // API トークンにし、[vars] の POST の 2 行のコメントを外す (Bearer 認証の POST になる)。
+// ほかに、ゴールタイムのランキング (/ranking) と本番で起きたことの記録 (/telemetry) も
+// この Worker が受ける (下のそれぞれの節に説明)。
 
 /** 上流の応答をこの秒数だけ使い回す (同じ資格情報を配っても構わない) */
 const CACHE_SEC = 60;
@@ -241,6 +243,152 @@ async function handleRanking(request, env, origin, fail) {
   return withCors(new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), origin);
 }
 
+// ---- 本番で起きたことの記録 (telemetry) ----
+//
+// ページの src/telemetry.ts が、捕まえ損ねた例外・読み込みの失敗・WebGL のコンテキスト喪失・
+// 読み込み時間・対戦の成否を text/plain の POST で送ってくる (sendBeacon。text/plain なので
+// CORS の事前確認が無い)。サイトごとに 1 つの Durable Object (TelemetryLog) に、新しいものから
+// TELEMETRY_KEEP 件だけ残す。定期監視 (.github/workflows/monitor.yml → tools/telemetry_report.mjs)
+// が「まだ通知していない記録」を読み出して Issue にまとめ、読んだところまでを通知済みにする。
+//   POST /telemetry                          ページから (許可した Origin のみ)。本文は JSON 1 件
+//   GET  /telemetry?site=matsue[&since=N]    まだ通知していない記録 (since を付ければ N 番より後の全部)
+//   POST /telemetry/ack?site=matsue&upto=N   N 番までを通知済みにする
+// GET と ack は Origin は要らないが Authorization: Bearer <TELEMETRY_TOKEN> が要る
+// (npx wrangler secret put TELEMETRY_TOKEN。GitHub の secret TELEMETRY_TOKEN と同じ値)。
+// 守れること / 守れないこと: 送り主はブラウザなので中身は偽れる。ここでできるのは Origin の確認、
+// 回数制限、大きさと項目の制限まで。名前や peer ID はページ側が送らない。
+
+/** サイトごとに残す件数 (古いものから消す) */
+const TELEMETRY_KEEP = 1000;
+const TELEMETRY_KINDS = ['error', 'load', 'net', 'gl'];
+/** 1 件の本文の上限 (文字)。これより長ければ受け付けない */
+const TELEMETRY_MAX_BODY = 8000;
+
+/** 記録の番号をキーにする (0 詰めして辞書順 = 番号順にする) */
+export function telemetryKey(seq) {
+  return `r:${String(seq).padStart(10, '0')}`;
+}
+
+/**
+ * ページから来た記録を検査して、残す項目だけに整える。種類が違う・event が無いものは null。
+ * data の中は文字列 (1500 文字まで)・数・真偽だけ残す。
+ */
+export function cleanTelemetry(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (!TELEMETRY_KINDS.includes(value.kind)) return null;
+  const event = typeof value.event === 'string' ? value.event.slice(0, 60) : '';
+  if (!event) return null;
+  const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : undefined);
+  const data = {};
+  if (value.data && typeof value.data === 'object') {
+    for (const [k, v] of Object.entries(value.data).slice(0, 12)) {
+      if (typeof v === 'string') data[k.slice(0, 30)] = v.slice(0, 1500);
+      else if (typeof v === 'number' || typeof v === 'boolean') data[k.slice(0, 30)] = v;
+    }
+  }
+  return {
+    kind: value.kind,
+    event,
+    data,
+    at: Number.isFinite(value.at) ? Math.round(value.at) : 0,
+    build: str(value.build, 20),
+    path: str(value.path, 200),
+    ua: str(value.ua, 300),
+    quality: str(value.quality, 20),
+    lang: str(value.lang, 10),
+  };
+}
+
+/**
+ * サイトごとの記録。1 件 1 キー (r:0000000001 …) で保存し、meta に最後の番号・通知済みの番号・件数を持つ。
+ * DailyCounter と同じく fetch 方式にして、Node でもそのまま動作確認できるようにしてある。
+ *   POST /add  { ...record }   → { seq }
+ *   GET  /list[?since=N]       → { last, notified, records }  (since 省略時は notified より後)
+ *   POST /ack  { upto }        → { notified }
+ */
+export class TelemetryLog {
+  constructor(state) {
+    this.storage = state.storage;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const meta = (await this.storage.get('meta')) ?? { last: 0, notified: 0, count: 0 };
+    if (request.method === 'POST' && url.pathname === '/add') {
+      const rec = await request.json();
+      const seq = meta.last + 1;
+      await this.storage.put(telemetryKey(seq), { seq, t: Date.now(), ...rec });
+      meta.last = seq;
+      meta.count += 1;
+      if (meta.count > TELEMETRY_KEEP) {
+        const old = await this.storage.list({ prefix: 'r:', limit: meta.count - TELEMETRY_KEEP });
+        await this.storage.delete([...old.keys()]);
+        meta.count = TELEMETRY_KEEP;
+      }
+      await this.storage.put('meta', meta);
+      return Response.json({ seq });
+    }
+    if (request.method === 'POST' && url.pathname === '/ack') {
+      const { upto } = await request.json();
+      meta.notified = Math.max(meta.notified, Math.min(Number(upto) || 0, meta.last));
+      await this.storage.put('meta', meta);
+      return Response.json({ notified: meta.notified });
+    }
+    const sinceParam = url.searchParams.get('since');
+    const since = sinceParam === null ? meta.notified : Math.max(0, Number(sinceParam) || 0);
+    const map = await this.storage.list({ prefix: 'r:', start: telemetryKey(since + 1) });
+    return Response.json({ last: meta.last, notified: meta.notified, records: [...map.values()] });
+  }
+}
+
+function telemetryLog(env, site) {
+  return env.TELEMETRY_LOG.get(env.TELEMETRY_LOG.idFromName(site));
+}
+
+/** ページからの記録 (POST /telemetry)。origin は許可済み */
+async function handleTelemetryPost(request, env, origin, fail) {
+  if (!env.TELEMETRY_LOG) return fail(503, 'telemetry is not configured');
+  if (request.method !== 'POST') return fail(405, 'method not allowed');
+  if (env.RATE_LIMITER) {
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    const { success } = await env.RATE_LIMITER.limit({ key: `tel:${ip}` });
+    if (!success) return fail(429, 'too many requests');
+  }
+  const body = await request.text();
+  if (body.length > TELEMETRY_MAX_BODY) return fail(413, 'too large');
+  let value;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return fail(400, 'bad json');
+  }
+  const rec = cleanTelemetry(value);
+  if (!rec) return fail(400, 'bad record');
+  await telemetryLog(env, siteOf(origin)).fetch('https://log/add', { method: 'POST', body: JSON.stringify(rec) });
+  return withCors(new Response(null, { status: 204 }), origin);
+}
+
+/** 定期監視からの読み出しと通知済みの印 (GET /telemetry, POST /telemetry/ack)。Origin は要らないが TELEMETRY_TOKEN が要る */
+async function handleTelemetryAdmin(request, env) {
+  const auth = request.headers.get('Authorization') ?? '';
+  if (!env.TELEMETRY_TOKEN || auth !== `Bearer ${env.TELEMETRY_TOKEN}`) return text(403, 'forbidden');
+  if (!env.TELEMETRY_LOG) return text(503, 'telemetry is not configured');
+  const url = new URL(request.url);
+  const site = url.searchParams.get('site') ?? '';
+  if (!/^[a-z]+$/.test(site)) return text(400, 'site required');
+  const log = telemetryLog(env, site);
+  if (url.pathname === '/telemetry/ack') {
+    if (request.method !== 'POST') return text(405, 'method not allowed');
+    const upto = Number(url.searchParams.get('upto'));
+    if (!Number.isFinite(upto)) return text(400, 'upto required');
+    const res = await log.fetch('https://log/ack', { method: 'POST', body: JSON.stringify({ upto }) });
+    return new Response(res.body, { headers: { 'content-type': 'application/json' } });
+  }
+  if (request.method !== 'GET') return text(405, 'method not allowed');
+  const since = url.searchParams.get('since');
+  const res = await log.fetch(`https://log/list${since === null ? '' : `?since=${encodeURIComponent(since)}`}`);
+  return new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+}
+
 /** 管理用の削除。Origin は要らないが ADMIN_TOKEN が要る */
 async function handleRankingDelete(request, env) {
   const auth = request.headers.get('Authorization') ?? '';
@@ -262,6 +410,8 @@ export default {
       return Response.json(await dailyStatus(env), { headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'DELETE' && path === '/ranking') return handleRankingDelete(request, env);
+    // 記録の読み出しと通知済みの印 (定期監視から。Origin 不要、TELEMETRY_TOKEN が要る)
+    if ((request.method === 'GET' && path === '/telemetry') || path === '/telemetry/ack') return handleTelemetryAdmin(request, env);
     const origin = request.headers.get('Origin') ?? '';
     if (!allowedOrigins(env).includes(origin)) return text(403, 'forbidden');
     // 許可した Origin への失敗応答には CORS ヘッダーを付ける。付けないとブラウザは
@@ -274,6 +424,7 @@ export default {
       return pre;
     }
     if (path === '/ranking') return handleRanking(request, env, origin, fail);
+    if (path === '/telemetry') return handleTelemetryPost(request, env, origin, fail);
     if (request.method !== 'GET') return fail(405, 'method not allowed');
     if (!env.TURN_API_URL) return fail(500, 'TURN_API_URL is not set');
 

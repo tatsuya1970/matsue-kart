@@ -296,9 +296,9 @@ npm run dev             # http://localhost:5182/
 
 **切り戻し。** GitHub の Actions → Deploy to GitHub Pages → Run workflow で、`ref` に戻したいコミットの SHA（かタグ）を入れて実行すると、その版を配信し直します。次に `main` へ push すると `main` の先頭が配信されるので、原因を直すまでは `git revert` で `main` 自体を戻しておくのが確実です。
 
-**外形監視。** `.github/workflows/monitor.yml` が 3 時間おきに本番を点検し、対戦のシグナリングに使う nostr リレー 8 つのうち 3 つ以上につながるかも見ます（`node tools/check_site.mjs https://matsue.citykart.jp/ --relays` で手元でも実行できます）。本番のトップ画面をブラウザで開くと利用者の「対戦待ち」表示に監視が映ってしまうので、HTTP とリレーの口だけを見ています。リポジトリに 60 日動きが無いと、GitHub は定期実行を自動で止めます。
+**外形監視と通知。** `.github/workflows/monitor.yml` が 3 時間おきに本番を点検し、対戦のシグナリングに使う nostr リレー 8 つのうち 3 つ以上につながるかも見ます（`node tools/check_site.mjs https://matsue.citykart.jp/ --relays` で手元でも実行できます）。本番のトップ画面をブラウザで開くと利用者の「対戦待ち」表示に監視が映ってしまうので、HTTP とリレーの口だけを見ています。失敗すると Issue「本番の外形監視が失敗しています」を作って（開いていればコメントを足して）知らせ、通るようになったら「復旧」とコメントして閉じます（`tools/alert_issue.mjs`）。Issue は持ち主を担当者にして @メンションするので、リポジトリを Watch していなくてもメールが届きます。ジョブ自体も失敗にするので、Actions の失敗通知も別に届きます。リポジトリに 60 日動きが無いと GitHub は定期実行を止めるので、実行のたびに自分を有効化し直して時計を戻しています。
 
-**本番で起きたことの記録。** 捕まえ損ねた例外、読み込みの失敗、WebGL のコンテキスト喪失、読み込み完了までの時間、presence で誰かとつながるまでの時間、対戦の発走人数を `src/telemetry.ts` が記録します。送り先はリポジトリ変数 `TELEMETRY_URL`（ビルド時に `VITE_TELEMETRY_URL` として埋め込む）で、未設定なら送らずにページ内に残すだけです（コンソールで `__telemetry()`）。受け口は `text/plain` の POST を受けて保存するだけのもの（Cloudflare Workers の無料枠など）で足ります。送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送りません。
+**本番で起きたことの記録と通知。** 捕まえ損ねた例外、読み込みの失敗、WebGL のコンテキスト喪失、読み込み完了までの時間、presence で誰かとつながるまでの時間、対戦の発走人数を `src/telemetry.ts` が記録します。送り先はリポジトリ変数 `TELEMETRY_URL`（ビルド時に `VITE_TELEMETRY_URL` として埋め込む。値は TURN と同じ Worker の URL に `/telemetry` を付けたもの）で、未設定なら送らずにページ内に残すだけです（コンソールで `__telemetry()`）。Worker（`workers/turn/` の `TelemetryLog`）はサイトごとに新しい 1,000 件を残し、定期監視が 3 時間おきに未通知の記録を読み出して（`tools/telemetry_report.mjs`。リポジトリの secret `TELEMETRY_TOKEN` を Worker の secret と同じ値にしておく）、例外・読み込み失敗・WebGL の喪失があれば同じ内容ごとにまとめて Issue「利用者のブラウザでエラーが起きています」に足します。この Issue は直したら手で閉じてください。読み込み時間や対戦の記録は通知せず、件数だけ添えます。送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送りません。残っている記録を手元で全部見るには `TELEMETRY_URL=… TELEMETRY_TOKEN=… node tools/telemetry_report.mjs --site matsue --all` です。
 
 **ランキング。** ゴールするとリザルト画面に上位 10 件が出て、名前を入れて自分のタイムを登録できます（`src/ranking.ts`）。記録は TURN と同じ Worker（`workers/turn/` の `Leaderboard`）がサイトごとに上位 100 件を保存します。送り先はリポジトリ変数 `RANKING_URL`（ビルド時に `VITE_RANKING_URL`、値は Worker の URL に `/ranking` を付けたもの）で、未設定ならランキングは出ません。タイムはブラウザで計算しているので、改造すれば速いタイムを送れます。Worker はありえない速さ（コースの全長 ÷ 100 m/s より速いもの）を拒否し、回数を制限するだけです。不適切な名前や不正な記録は、管理用の合言葉（`npx wrangler secret put ADMIN_TOKEN` で設定）を付けて消します。
 
@@ -442,6 +442,8 @@ tools/probe_scene.mjs      画面前方の物体をレイキャストで特定
 tools/probe_uv.mjs         UV とアトラス参照先の特定
 tools/check_trains.mjs     車両が走行しているかの確認
 tools/check_site.mjs       配信物の点検 (dist/ か本番 URL。.bin と .json の食い違い・JS の参照切れ・リレー)
+tools/telemetry_report.mjs 本番で起きたことの記録を Worker から取り出して Issue 用にまとめる
+tools/alert_issue.mjs      監視の結果を GitHub の Issue で知らせる (作る・足す・復旧で閉じる)
 tests/                     vitest の単体テスト (npm test)
 src/fetch.ts      アセットの取得 (状態の確認・時間切れ・再試行・長さの検証)
 src/telemetry.ts  本番で起きた例外・読み込み失敗・対戦の成否の記録

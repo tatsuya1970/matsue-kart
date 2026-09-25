@@ -1,8 +1,16 @@
 name: Monitor production
 
-# 本番の外形監視。配信物が揃っているかと、対戦のシグナリングに使う nostr リレーに
-# つながるかを定期的に見る。失敗すると GitHub から通知が届く (Actions の失敗通知)。
-# リポジトリに 60 日動きが無いと、GitHub は定期実行を自動で止めるので注意。
+# 本番の外形監視と、利用者のブラウザで起きたエラーの通知。3 時間おきに:
+#   1. 配信物が揃っているか・TURN の設定 API が応えるか・対戦のシグナリングに使う nostr リレーに
+#      つながるかを見る (tools/check_site.mjs)。失敗すると Issue「本番の外形監視が失敗しています」を
+#      作り (開いていればコメントを足し)、通るようになったら「復旧」とコメントして閉じる。
+#      ジョブ自体も失敗にするので、Actions の失敗通知も別に届く
+#   2. ページの src/telemetry.ts が Worker (workers/turn/) に送った例外・読み込み失敗をまとめ、
+#      Issue「利用者のブラウザでエラーが起きています」に足す (tools/telemetry_report.mjs)。
+#      これは直したら手で閉じる。まとめた記録は Worker 側で通知済みにするので、次回は新しい分だけ
+# Issue は持ち主を担当者にして @メンションするので、リポジトリを Watch していなくてもメールで届く
+# (tools/alert_issue.mjs)。要るもの: リポジトリ変数 TELEMETRY_URL、secret TELEMETRY_TOKEN。
+# リポジトリに 60 日動きが無いと GitHub は定期実行を止めるので、最後に自分を有効化し直して時計を戻す。
 on:
   schedule:
     - cron: '17 */3 * * *'
@@ -10,6 +18,17 @@ on:
 
 permissions:
   contents: read
+  issues: write    # 通知の Issue
+  actions: write   # 定期実行の有効化し直し
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+env:
+  SITE_URL: https://matsue.citykart.jp/
+  SITE: matsue
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
   check:
@@ -23,4 +42,49 @@ jobs:
       - run: npm ci
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-      - run: node tools/check_site.mjs https://matsue.citykart.jp/ --relays
+
+      - name: Check production
+        id: site
+        # 失敗しても先へ進み (通知してから)、最後のステップでジョブを失敗にする。
+        # shell: bash を明示すると pipefail が付き、tee を挟んでも node の失敗が伝わる
+        continue-on-error: true
+        shell: bash
+        run: node tools/check_site.mjs "$SITE_URL" --relays 2>&1 | tee site.log
+
+      - name: Collect browser errors
+        id: telemetry
+        run: node tools/telemetry_report.mjs --site "$SITE" --out telemetry.md
+        env:
+          TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
+          TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_TOKEN }}
+
+      - name: Report site failure
+        if: steps.site.outcome == 'failure'
+        run: node tools/alert_issue.mjs open --title "本番の外形監視が失敗しています" --text "$SITE_URL の点検が失敗しました。直るまで 3 時間おきにここへ足します。" --log site.log --run "$RUN_URL"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Close site issue on recovery
+        if: steps.site.outcome == 'success'
+        run: node tools/alert_issue.mjs close --title "本番の外形監視が失敗しています" --text "点検が通るようになりました。" --run "$RUN_URL"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Report browser errors
+        if: steps.telemetry.outputs.count != '0'
+        run: node tools/alert_issue.mjs open --title "利用者のブラウザでエラーが起きています" --body-file telemetry.md --run "$RUN_URL"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Mark browser records as notified
+        run: node tools/telemetry_report.mjs --site "$SITE" --ack "${{ steps.telemetry.outputs.last }}"
+        env:
+          TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
+          TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_TOKEN }}
+
+      - name: Keep the schedule alive
+        if: always()
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/monitor.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Fail when the site check failed
+        if: steps.site.outcome == 'failure'
+        run: exit 1
