@@ -1,0 +1,172 @@
+<template>
+  <style>
+      @font-face { font-family: "Noto Sans JP"; src: url("assets/fonts/NotoSansJP-VF.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }
+      @font-face { font-family: "IBM Plex Mono"; src: url("assets/fonts/IBMPlexMono-Medium.ttf") format("truetype"); font-weight: 500; font-style: normal; font-display: block; }
+      @font-face { font-family: "IBM Plex Mono"; src: url("assets/fonts/IBMPlexMono-SemiBold.ttf") format("truetype"); font-weight: 600; font-style: normal; font-display: block; }
+      @font-face { font-family: "Barlow"; src: url("assets/fonts/Barlow-BlackItalic.ttf") format("truetype"); font-weight: 900; font-style: italic; font-display: block; }
+      @font-face { font-family: "Barlow"; src: url("assets/fonts/Barlow-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }
+
+#root {
+      position: absolute;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+      color: #FFFFFF;
+      font-family: "Noto Sans JP", sans-serif;
+    }
+
+    #b06-bridge-scrim {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 62% 78% at 0% 100%, rgba(11, 26, 42, 0.55) 0%, rgba(11, 26, 42, 0.32) 45%, rgba(11, 26, 42, 0) 100%);
+      pointer-events: none;
+    }
+
+    #b06-bridge-tag-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    /* SPOT tag block: left 5.5cqw, bottom edge 22cqh from frame bottom */
+    #b06-bridge-tag {
+      position: absolute;
+      left: 5.5cqw;
+      bottom: 22cqh;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    #b06-bridge-kicker {
+      font-family: "IBM Plex Mono", monospace;
+      font-weight: 600;
+      font-size: 1.1cqw;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #FFD83D;
+      line-height: 1;
+      margin-bottom: 0.8cqw;
+      white-space: nowrap;
+    }
+
+    #b06-bridge-slabwrap {
+      position: relative;
+    }
+
+    #b06-bridge-slab {
+      position: relative;
+      background: #FFD83D;
+      padding: 0.6cqw 1.6cqw;
+      border-radius: 0;
+      box-shadow: none;
+      overflow: hidden;
+    }
+
+    #b06-bridge-name {
+      display: block;
+      font-family: "Noto Sans JP", sans-serif;
+      font-weight: 900;
+      font-size: 5.2cqw;
+      line-height: 1.1;
+      color: #0B1A2A;
+      white-space: nowrap;
+    }
+
+    /* BATTLE! stamp — sits on the slab's upper-right corner */
+    #b06-bridge-stamp {
+      position: absolute;
+      right: -2.2cqw;
+      top: -2.6cqw;
+      font-family: "Noto Sans JP", sans-serif;
+      font-weight: 900;
+      font-style: italic;
+      font-size: 3.2cqw;
+      line-height: 1;
+      letter-spacing: 0.02em;
+      color: #FFFFFF;
+      -webkit-text-stroke: 0.22cqw #FFD83D;
+      paint-order: stroke fill;
+      white-space: nowrap;
+      transform-origin: 50% 60%;
+    }
+  </style>
+
+  <div id="root" data-composition-id="06-bridge" data-width="1920" data-height="1080">
+    <!-- Full-bleed footage (hoisted to host by the assembler) -->
+    <!-- approved frame video hoisted by assemble-index -->
+
+    <!-- Soft navy scrim under the tag (bottom-left) -->
+    <div id="b06-bridge-scrim" class="clip" data-start="0" data-duration="2.5" data-track-index="1"></div>
+
+    <!-- SPOT tag + BATTLE! stamp -->
+    <div id="b06-bridge-tag-layer" class="clip" data-start="0" data-duration="2.5" data-track-index="2">
+      <div id="b06-bridge-tag">
+        <div id="b06-bridge-kicker">SPOT 04</div>
+        <div id="b06-bridge-slabwrap">
+          <div id="b06-bridge-slab">
+            <span id="b06-bridge-name">宍道湖大橋</span>
+          </div>
+          <div id="b06-bridge-stamp">BATTLE!</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      window.__timelines = window.__timelines || {};
+      var tl = gsap.timeline({ paused: true });
+
+      // 120 BPM grid: 1 beat = 0.5s
+      var BEAT = 0.5;
+      var BEATS = [BEAT * 1, BEAT * 2, BEAT * 3]; // kicker/slab, name, BATTLE!
+      var CQW = 19.2; // 1cqw on the 1920 canvas
+
+      // Scene 1 (0.0–0.5s): footage only; scrim eases in just ahead of the tag.
+      tl.fromTo("#b06-bridge-scrim", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 0.2);
+
+      // Scene 2 (0.5s): yellow slab wipes left->right, kicker fades/slides up.
+      tl.fromTo(
+        "#b06-bridge-slab",
+        { clipPath: "inset(0% 100% 0% 0%)" },
+        { clipPath: "inset(0% 0% 0% 0%)", duration: 0.35, ease: "power3.out" },
+        BEATS[0]
+      );
+      tl.fromTo(
+        "#b06-bridge-kicker",
+        { opacity: 0, y: 0.6 * CQW },
+        { opacity: 1, y: 0, duration: 0.3, ease: "power2.out" },
+        BEATS[0]
+      );
+
+      // Scene 3 (1.0s): place name rises into the overflow-hidden slab.
+      tl.fromTo(
+        "#b06-bridge-name",
+        { yPercent: 60, opacity: 0 },
+        { yPercent: 0, opacity: 1, duration: 0.4, ease: "power3.out" },
+        BEATS[1]
+      );
+
+      // Scene 4 (1.5s, beat 4): BATTLE! stamps in — fast, smooth, no bounce.
+      tl.fromTo(
+        "#b06-bridge-stamp",
+        { opacity: 0, scale: 1.9, rotation: -14, filter: "blur(10px)" },
+        { opacity: 1, scale: 1, rotation: -8, filter: "blur(0px)", duration: 0.28, ease: "power4.out" },
+        BEATS[2]
+      );
+      // Hold: a quiet, finite settle through the end (no yoyo, no exit).
+      tl.fromTo(
+        "#b06-bridge-stamp",
+        { scale: 1 },
+        { scale: 1.05, duration: 2.5 - (BEATS[2] + 0.28), ease: "sine.out", immediateRender: false },
+        BEATS[2] + 0.28
+      );
+
+      window.__timelines["06-bridge"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,230 @@
+<template>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+      @font-face { font-family: "Noto Sans JP"; src: url("assets/fonts/NotoSansJP-VF.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }
+      @font-face { font-family: "IBM Plex Mono"; src: url("assets/fonts/IBMPlexMono-Medium.ttf") format("truetype"); font-weight: 500; font-style: normal; font-display: block; }
+      @font-face { font-family: "IBM Plex Mono"; src: url("assets/fonts/IBMPlexMono-SemiBold.ttf") format("truetype"); font-weight: 600; font-style: normal; font-display: block; }
+      @font-face { font-family: "Barlow"; src: url("assets/fonts/Barlow-BlackItalic.ttf") format("truetype"); font-weight: 900; font-style: italic; font-display: block; }
+      @font-face { font-family: "Barlow"; src: url("assets/fonts/Barlow-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }
+
+    #root {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+      font-family: "Noto Sans JP", sans-serif;
+      color: #ffffff;
+    }
+    /* Footage is the ground: a navy scrim weighted to the type side only (60/40, right stays full-bright). */
+    #root .clip {
+      position: absolute;
+      inset: 0;
+    }
+    .hook01-scrim {
+      background:
+        linear-gradient(90deg, rgba(11, 26, 42, 0.62) 0%, rgba(11, 26, 42, 0.38) 34%, rgba(11, 26, 42, 0) 58%),
+        linear-gradient(0deg, rgba(11, 26, 42, 0.45) 0%, rgba(11, 26, 42, 0) 40%);
+    }
+    .hook01-stage {
+      position: absolute;
+      left: 5.5cqw;
+      top: 7cqw;
+      width: 70cqw;
+      transform-origin: 0% 40%;
+    }
+    .hook01-line {
+      position: relative;
+      display: inline-block;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      white-space: nowrap;
+      color: #ffffff;
+    }
+    .hook01-slab {
+      position: absolute;
+      inset: -1.1cqw -1.8cqw -1.1cqw -1.4cqw;
+      background: #0b1a2a;
+      transform-origin: 0% 50%;
+    }
+    .hook01-text {
+      position: relative;
+      display: inline-block;
+      transform-origin: 0% 60%;
+    }
+    .hook01-l1 {
+      font-size: 8cqw;
+    }
+    .hook01-l2 {
+      font-size: 10.6cqw;
+      margin-top: 3.4cqw;
+    }
+    .hook01-accent {
+      display: inline-block;
+      color: #ffd83d;
+      transform-origin: 50% 70%;
+    }
+    .hook01-row {
+      display: block;
+    }
+    .hook01-rule {
+      display: block;
+      width: 5cqw;
+      height: 0.42cqw;
+      margin-top: 2.1cqw;
+      margin-left: 0.2cqw;
+      background: #ffd83d;
+      transform-origin: 0% 50%;
+    }
+  </style>
+
+  <div
+    id="root"
+    data-composition-id="01-hook"
+    data-start="0"
+    data-duration="3.4"
+    data-width="1920"
+    data-height="1080"
+  >
+    <!-- Approved footage: full-bleed start-gate launch (hoisted to the host root by the assembler). -->
+    <!-- approved frame video hoisted by assemble-index -->
+
+    <!-- Lowest content lane: navy scrim over the footage (type side only). -->
+    <div
+      id="hook01-scrim"
+      class="clip hook01-scrim"
+      data-start="0"
+      data-duration="3.4"
+      data-track-index="1"
+    ></div>
+
+    <!-- Type lane -->
+    <div
+      id="hook01-type"
+      class="clip"
+      data-start="0"
+      data-duration="3.4"
+      data-track-index="2"
+    >
+      <div class="hook01-stage" id="hook01-stage">
+        <div class="hook01-row">
+          <div class="hook01-line hook01-l1" id="hook01-l1">
+            <div class="hook01-slab" id="hook01-slab1"></div>
+            <span class="hook01-text" id="hook01-t1">この街、</span>
+          </div>
+          <div class="hook01-rule" id="hook01-rule"></div>
+        </div>
+        <div class="hook01-row">
+          <div class="hook01-line hook01-l2" id="hook01-l2">
+            <div class="hook01-slab" id="hook01-slab2"></div>
+            <span class="hook01-text" id="hook01-t2"
+              ><span class="hook01-accent" id="hook01-zenbu">全部</span>走れる。</span
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const ID = "01-hook";
+      const DURATION = 3;
+      // 120 BPM grid — 1 beat = 0.5s. Beat n starts at (n - 1) * PULSE.
+      const PULSE = 0.5;
+      const beat = (n) => (n - 1) * PULSE;
+      const BEATS = [beat(2), beat(4)]; // phrase onsets: 「この街、」 / 「全部走れる。」
+
+      const tl = gsap.timeline({ paused: true });
+
+      // Scene 1 (0.0–0.5): footage only — every type piece starts hidden via its fromTo below.
+
+      // Scene 2 (beat 2 = 0.5s): 「この街、」 slams — scale + blur slam, slab wipes behind it.
+      tl.fromTo(
+        "#hook01-slab1",
+        { scaleX: 0 },
+        { scaleX: 1, duration: 0.28, ease: "expo.out" },
+        BEATS[0],
+      );
+      tl.fromTo(
+        "#hook01-t1",
+        { scale: 1.55, opacity: 0, filter: "blur(16px)" },
+        { scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.42, ease: "power4.out" },
+        BEATS[0],
+      );
+      // Percussive stage punch on the hit.
+      tl.fromTo(
+        "#hook01-stage",
+        { scale: 1.035 },
+        { scale: 1, duration: 0.3, ease: "power3.out" },
+        BEATS[0],
+      );
+
+      // Beat 3 (1.0s): yellow rule stub snaps in under line 1.
+      tl.fromTo(
+        "#hook01-rule",
+        { scaleX: 0 },
+        { scaleX: 1, duration: 0.22, ease: "expo.out" },
+        beat(3),
+      );
+
+      // Scene 3 (beat 4 = 1.5s): 「全部走れる。」 slams in below — heavy rise + rotate, larger.
+      tl.fromTo(
+        "#hook01-slab2",
+        { scaleX: 0 },
+        { scaleX: 1, duration: 0.3, ease: "expo.out" },
+        BEATS[1],
+      );
+      tl.fromTo(
+        "#hook01-t2",
+        { y: 110, rotation: 5, opacity: 0 },
+        { y: 0, rotation: 0, opacity: 1, duration: 0.45, ease: "circ.out" },
+        BEATS[1],
+      );
+      // 「全部」 — the one accent — overshoot pop just behind the hit.
+      tl.fromTo(
+        "#hook01-zenbu",
+        { scale: 0.6 },
+        { scale: 1, duration: 0.4, ease: "power3.out" },
+        BEATS[1] + 0.06,
+      );
+      // Harder stage punch on the payoff beat.
+      tl.fromTo(
+        "#hook01-stage",
+        { scale: 1.06 },
+        { scale: 1, duration: 0.34, ease: "power3.out", immediateRender: false },
+        BEATS[1],
+      );
+
+      // Beat 5 (2.0s): both lines lock — rule stub extends as the lock accent.
+      tl.to("#hook01-rule", { scaleX: 1.8, duration: 0.24, ease: "expo.out" }, beat(5));
+
+      // Scene 4 (beat 6 = 2.5s → end): held read, subtle jitter only (sine-wave-loop, onUpdate form).
+      const IDLE_START = beat(6);
+      const IDLE_DUR = DURATION - IDLE_START;
+      const Y_AMP = 2;
+      const CYCLES = 1; // one short jitter cycle across the 0.5s hold
+      const phase = { p: 0 };
+      const stage = document.querySelector("#hook01-stage");
+      tl.to(
+        phase,
+        {
+          p: Math.PI * 2 * CYCLES,
+          duration: IDLE_DUR,
+          ease: "none",
+          onUpdate: () => {
+            const s = Math.sin(phase.p);
+            if (stage) {
+              gsap.set(stage, { y: s * Y_AMP });
+            }
+          },
+        },
+        IDLE_START,
+      );
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines[ID] = tl;
+    })();
+  </script>
+</template>

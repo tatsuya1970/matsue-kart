@@ -12,3 +12,22 @@ data/osm/check_route.json
 data/osm/query.txt
 # TURN の設定 (npm run turn:prepare が書き出す。資格情報 API の URL を含むことがある)
 public/turn.json
+
+# プロモ動画 (videos/)。素材と書き出しは重いので入れない (福山版と同じ方針)。
+# 走行クリップの撮り直しは bash videos/matsue-kart-promo/capture/record_all.sh
+videos/clips*
+videos/*/renders
+videos/*/snapshots
+videos/*/assets/*.mp4
+# BGM は audio/make_bgm.mjs で合成し直せる
+videos/*/assets/*.wav
+videos/*/audio/*.wav
+# NotoSansJP-VF.ttf (9.6MB) は Google Fonts から取得して置く (audio/localize_fonts.mjs 参照)
+videos/*/assets/fonts/NotoSansJP-VF.ttf
+videos/*/.hyperframes
+videos/*/.media
+videos/*/.thumbnails
+# capture/ の撮影結果 (record_all.sh と npx hyperframes capture で取り直せる)
+videos/*/capture/assets
+videos/*/capture/screenshots
+videos/*/capture/extracted

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js" integrity="sha384-sG0Hv1tP1lZCk9KQmrIbY/XNwi+OY84GQqhMscbnsoBFqAz8KNCil1kvfL3Hbbk2" crossorigin="anonymous"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #000;
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0B1A2A;
+      }
+      .scene {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        /* 走行映像 (root 直下の <video>) より手前に文字・帯を出す */
+        z-index: 2;
+      }
+      #root > video.clip {
+        z-index: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="30"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div
+        id="el-01-hook"
+        class="scene"
+        data-composition-id="01-hook"
+        data-composition-src="compositions/frames/01-hook.html"
+        data-start="0"
+        data-duration="3.4"
+        data-track-index="0"
+      ></div>
+
+      <div
+        id="el-02-title"
+        class="scene"
+        data-composition-id="02-title"
+        data-composition-src="compositions/frames/02-title.html"
+        data-start="3"
+        data-duration="3"
+        data-track-index="1"
+      ></div>
+
+      <div
+        id="el-03-pref"
+        class="scene"
+        data-composition-id="03-pref"
+        data-composition-src="compositions/frames/03-pref.html"
+        data-start="6"
+        data-duration="2.6"
+        data-track-index="0"
+      ></div>
+
+      <div
+        id="el-04-castle"
+        class="scene"
+        data-composition-id="04-castle"
+        data-composition-src="compositions/frames/04-castle.html"
+        data-start="8"
+        data-duration="3"
+        data-track-index="1"
+      ></div>
+
+      <div
+        id="el-05-cityhall"
+        class="scene"
+        data-composition-id="05-cityhall"
+        data-composition-src="compositions/frames/05-cityhall.html"
+        data-start="11"
+        data-duration="2"
+        data-track-index="0"
+      ></div>
+
+      <div
+        id="el-06-bridge"
+        class="scene"
+        data-composition-id="06-bridge"
+        data-composition-src="compositions/frames/06-bridge.html"
+        data-start="13"
+        data-duration="2.5"
+        data-track-index="1"
+      ></div>
+
+      <div
+        id="el-07-sunset"
+        class="scene"
+        data-composition-id="07-sunset"
+        data-composition-src="compositions/frames/07-sunset.html"
+        data-start="15.5"
+        data-duration="3"
+        data-track-index="0"
+      ></div>
+
+      <div
+        id="el-08-lake"
+        class="scene"
+        data-composition-id="08-lake"
+        data-composition-src="compositions/frames/08-lake.html"
+        data-start="18"
+        data-duration="2.9"
+        data-track-index="1"
+      ></div>
+
+      <div
+        id="el-09-stats"
+        class="scene"
+        data-composition-id="09-stats"
+        data-composition-src="compositions/frames/09-stats.html"
+        data-start="20.5"
+        data-duration="5"
+        data-track-index="0"
+      ></div>
+
+      <div
+        id="el-10-cta"
+        class="scene"
+        data-composition-id="10-cta"
+        data-composition-src="compositions/frames/10-cta.html"
+        data-start="25"
+        data-duration="5"
+        data-track-index="1"
+      ></div>
+
+      <video id="el-01-hook-video-0" src="assets/start.mp4" preload="auto" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="0"
+        data-duration="3"
+        data-track-index="1000"
+      ></video>
+
+      <video id="f02-title-footage" src="assets/bridge_top.mp4" preload="auto" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="3"
+        data-duration="3"
+        data-track-index="2000"
+      ></video>
+
+      <video id="p03-pref-video" src="assets/pref.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="6"
+        data-duration="2"
+        data-track-index="3000"
+      ></video>
+
+      <video id="castle04-video" src="assets/castle.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="8"
+        data-duration="3"
+        data-track-index="4000"
+      ></video>
+
+      <video id="cityhall-05-footage" src="assets/cityhall.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="11"
+        data-duration="2"
+        data-track-index="5000"
+      ></video>
+
+      <video id="b06-bridge-footage" src="assets/bridge.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="13"
+        data-duration="2.5"
+        data-track-index="6000"
+      ></video>
+
+      <video id="s07-sunset-video" src="assets/sunset.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="15.5"
+        data-duration="2.5"
+        data-track-index="7000"
+      ></video>
+
+      <video id="lake08-video" src="assets/lake.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="18"
+        data-duration="2.5"
+        data-track-index="8000"
+      ></video>
+
+      <video id="p09-stats-video" src="assets/pack.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="20.5"
+        data-duration="4.5"
+        data-track-index="9000"
+      ></video>
+
+      <video id="s10-cta-video" src="assets/station.mp4" muted playsinline
+        class="clip"
+        style="position:absolute;left:0px;top:0px;width:1920px;height:1080px;object-fit:cover"
+        data-start="25"
+        data-duration="3"
+        data-track-index="10000"
+      ></video>
+
+      <!-- BGM: audio/make_bgm.mjs で合成した 120BPM・30 秒のオリジナル曲 (ナレーションなし) -->
+      <audio id="bgm" src="assets/bgm.wav" preload="auto"
+        data-start="0"
+        data-duration="30"
+        data-track-index="11"
+        data-volume="0.8"
+      ></audio>
+
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+      // ── frame transitions (injected by transitions.mjs) ──
+      (function () { var tl = window.__timelines["main"];
+        tl.to("#el-01-hook", { scale: 2.5, opacity: 0, filter: "blur(8px)", duration: 0.4, ease: "power3.in" }, 3);
+        tl.fromTo("#el-02-title", { scale: 0.5, opacity: 0, filter: "blur(8px)" }, { scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.4, ease: "power3.out" }, 3);
+        tl.to("#el-03-pref", { filter: "blur(10px)", scale: 1.03, opacity: 0, duration: 0.6, ease: "power2.inOut" }, 8);
+        tl.fromTo("#el-04-castle", { filter: "blur(10px)", scale: 0.97, opacity: 0 }, { filter: "blur(0px)", scale: 1, opacity: 1, duration: 0.6, ease: "power2.inOut" }, 8);
+        tl.to("#el-07-sunset", { opacity: 0, duration: 0.5, ease: "power2.inOut" }, 18);
+        tl.fromTo("#el-08-lake", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.inOut" }, 18);
+        tl.to("#el-08-lake", { scale: 2.5, opacity: 0, filter: "blur(8px)", duration: 0.4, ease: "power3.in" }, 20.5);
+        tl.fromTo("#el-09-stats", { scale: 0.5, opacity: 0, filter: "blur(8px)" }, { scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.4, ease: "power3.out" }, 20.5);
+        tl.to("#el-09-stats", { opacity: 0, duration: 0.5, ease: "power2.inOut" }, 25);
+        tl.fromTo("#el-10-cta", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.inOut" }, 25);
+        tl.to({}, { duration: 30 }, 0); // full-span anchor — main.duration() == composition total (Studio master duration)
+      })();
+    </script>
+  </body>
+</html>

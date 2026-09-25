@@ -1,0 +1,233 @@
+<template>
+  <style>
+      @font-face { font-family: "Noto Sans JP"; src: url("assets/fonts/NotoSansJP-VF.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }
+      @font-face { font-family: "IBM Plex Mono"; src: url("assets/fonts/IBMPlexMono-Medium.ttf") format("truetype"); font-weight: 500; font-style: normal; font-display: block; }
+      @font-face { font-family: "IBM Plex Mono"; src: url("assets/fonts/IBMPlexMono-SemiBold.ttf") format("truetype"); font-weight: 600; font-style: normal; font-display: block; }
+      @font-face { font-family: "Barlow"; src: url("assets/fonts/Barlow-BlackItalic.ttf") format("truetype"); font-weight: 900; font-style: italic; font-display: block; }
+      @font-face { font-family: "Barlow"; src: url("assets/fonts/Barlow-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }
+
+#root {
+      position: absolute;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+      color: #FFFFFF;
+    }
+
+    /* Layer 2 of 3 (footage is hoisted beneath): soft centered navy vignette behind the lockup */
+    [class~="02-title-vignette"] {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(
+        ellipse 46cqw 30cqw at 50% 46%,
+        rgba(11, 26, 42, 0.86) 0%,
+        rgba(11, 26, 42, 0.70) 45%,
+        rgba(11, 26, 42, 0.28) 78%,
+        rgba(11, 26, 42, 0) 100%
+      );
+    }
+
+    /* Layer 3 of 3: type */
+    [class~="02-title-type"] {
+      position: absolute;
+      inset: 0;
+      perspective: 1400px;
+    }
+
+    /* Kicker — mono, yellow, rule stubs either side; sits above the wordmark */
+    [class~="02-title-kicker"] {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 15.6cqw; /* ~300px */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25cqw;
+    }
+    [class~="02-title-stub"] {
+      display: block;
+      width: 3.4cqw;
+      height: 2px;
+      background: #FFD83D;
+    }
+    [class~="02-title-stub-l"] { transform-origin: 100% 50%; }
+    [class~="02-title-stub-r"] { transform-origin: 0% 50%; }
+    [class~="02-title-kicker-text"] {
+      font-family: "IBM Plex Mono", monospace;
+      font-weight: 500;
+      font-size: 1.3cqw;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #FFD83D;
+      white-space: pre;
+      line-height: 1;
+    }
+
+    /* Wordmark — heavy italic uppercase Latin, centered, ~55% frame width */
+    [class~="02-title-stage"] {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 18.2cqw; /* ~350px */
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transform-style: preserve-3d;
+      will-change: transform;
+    }
+    [class~="02-title-letter"] {
+      display: inline-block;
+      font-family: "Barlow", sans-serif;
+      font-style: italic;
+      font-weight: 900;
+      font-size: 9.4cqw;
+      line-height: 1;
+      letter-spacing: -0.01em;
+      text-transform: uppercase;
+      color: #FFFFFF;
+      transform-style: preserve-3d;
+      backface-visibility: hidden;
+      will-change: transform, opacity;
+    }
+    [class~="02-title-space"] {
+      display: inline-block;
+      width: 2.6cqw;
+    }
+
+    /* Japanese subtitle — yellow display beneath the wordmark */
+    [class~="02-title-sub"] {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 30.2cqw; /* ~580px */
+      display: flex;
+      justify-content: center;
+    }
+    [class~="02-title-sub-char"] {
+      display: inline-block;
+      font-family: "Noto Sans JP", sans-serif;
+      font-weight: 900;
+      font-size: 5.2cqw;
+      line-height: 1.1;
+      letter-spacing: 0.04em;
+      color: #FFD83D;
+      will-change: transform, opacity;
+    }
+  </style>
+
+  <div id="root" data-composition-id="02-title" data-width="1920" data-height="1080">
+    <!-- Layer 1: full-bleed top-down footage (hoisted to host root by the assembler) -->
+    <!-- approved frame video hoisted by assemble-index -->
+
+    <!-- Layer 2: navy vignette -->
+    <div class="clip 02-title-vignette" data-start="0" data-duration="3" data-track-index="1"></div>
+
+    <!-- Layer 3: type -->
+    <div class="clip 02-title-type" data-start="0" data-duration="3" data-track-index="2">
+      <div class="02-title-kicker">
+        <span class="02-title-stub 02-title-stub-l"></span>
+        <span class="02-title-kicker-text" data-text="PLATEAU 3D CITY MODEL × MATSUE"></span>
+        <span class="02-title-stub 02-title-stub-r"></span>
+      </div>
+
+      <div class="02-title-stage">
+        <span class="02-title-letter">M</span><span class="02-title-letter">A</span><span class="02-title-letter">T</span><span class="02-title-letter">S</span><span class="02-title-letter">U</span><span class="02-title-letter">E</span><span class="02-title-space"></span><span class="02-title-letter">K</span><span class="02-title-letter">A</span><span class="02-title-letter">R</span><span class="02-title-letter">T</span>
+      </div>
+
+      <div class="02-title-sub" data-text="松江グランプリ"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      var ID = "02-title";
+      var scope = document.querySelector('[data-composition-id="' + ID + '"]');
+      function q(cls) { return scope.querySelector('[class~="' + cls + '"]'); }
+      function qa(cls) { return Array.prototype.slice.call(scope.querySelectorAll('[class~="' + cls + '"]')); }
+
+      // Split kicker + subtitle into per-character spans (fixed layout width from frame 0)
+      function splitInto(el, charClass) {
+        var text = el.getAttribute("data-text");
+        var chars = Array.from(text);
+        el.textContent = "";
+        return chars.map(function (ch) {
+          var s = document.createElement("span");
+          if (charClass) s.className = charClass;
+          s.textContent = ch;
+          el.appendChild(s);
+          return s;
+        });
+      }
+      var kickerChars = splitInto(q("02-title-kicker-text"), null);
+      var subChars = splitInto(q("02-title-sub"), "02-title-sub-char");
+
+      var tl = gsap.timeline({ paused: true });
+      var BEAT = 0.5;
+
+      // ---- Scene 1 (0.0–1.0s): vignette + depth-scatter-assemble wordmark ----
+      tl.fromTo(q("02-title-vignette"), { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "power2.out" }, 0);
+
+      var letters = qa("02-title-letter");
+      var n = letters.length;
+      var GOLDEN = Math.PI * (3 - Math.sqrt(5));
+      var RADIUS = 320, Z_NEAR = 320, Z_FAR = -420, TUMBLE = 70;
+      var ASSEMBLE_DUR = 0.72, STAGGER = 0.03;
+
+      // Park every letter in the cloud BEFORE any tween
+      var scatter = letters.map(function (el, i) {
+        var a = i * GOLDEN;
+        var depthT = n > 1 ? i / (n - 1) : 0;
+        return {
+          x: Math.cos(a) * RADIUS,
+          y: Math.sin(a) * RADIUS * 0.6,
+          z: Z_NEAR - depthT * (Z_NEAR - Z_FAR),
+          rotationX: Math.sin(a) * TUMBLE,
+          rotationY: Math.cos(a) * TUMBLE,
+          opacity: 0
+        };
+      });
+      letters.forEach(function (el, i) { gsap.set(el, scatter[i]); });
+
+      // Cloud spin gives the scatter life, resolving flat
+      tl.fromTo(q("02-title-stage"), { rotationY: -24 }, { rotationY: 0, duration: 1.0, ease: "power2.out" }, 0);
+
+      letters.forEach(function (el, i) {
+        var from = scatter[i];
+        tl.fromTo(el, from, {
+          x: 0, y: 0, z: 0, rotationX: 0, rotationY: 0, opacity: 1,
+          duration: ASSEMBLE_DUR,
+          ease: "power3.out",
+          immediateRender: true
+        }, i * STAGGER);
+      });
+
+      // ---- Scene 2 (1.0–2.0s): on beat 3, subtitle rises in beneath ----
+      // Precomputed reveal windows (content-aware: per-char stagger fits the beat)
+      var SUB_START = 2 * BEAT;          // beat 3 = 1.0s
+      var SUB_DUR = 0.55;
+      var SUB_STAGGER = Math.min(0.05, (BEAT - 0.1) / Math.max(1, subChars.length - 1));
+      subChars.forEach(function (el, i) {
+        tl.fromTo(el, { y: 70, opacity: 0 }, { y: 0, opacity: 1, duration: SUB_DUR, ease: "power3.out" }, SUB_START + i * SUB_STAGGER);
+      });
+
+      // ---- Scene 3 (2.0–3.0s): on beat 5, mono kicker types in + rule stubs ----
+      var KICK_START = 4 * BEAT;         // beat 5 = 2.0s
+      tl.fromTo(qa("02-title-stub"), { scaleX: 0 }, { scaleX: 1, duration: 0.35, ease: "power3.out" }, KICK_START);
+      var TYPE_SPAN = 0.6;
+      var perChar = TYPE_SPAN / kickerChars.length;
+      kickerChars.forEach(function (el, i) {
+        tl.fromTo(el, { opacity: 0 }, { opacity: 1, duration: 0.01, ease: "none" }, KICK_START + 0.08 + i * perChar);
+      });
+
+      // Pin timeline length to the frame duration (lockup holds still to 3.0s)
+      tl.set({}, {}, 3);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines[ID] = tl;
+    })();
+  </script>
+</template>
