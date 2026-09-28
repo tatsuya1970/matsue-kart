@@ -97,6 +97,9 @@
     #overlay h1 { font-size: 54px; margin: 0 0 6px; font-style: italic; letter-spacing: .05em; color: #ffd83d; text-shadow: 0 4px 0 #b6201f, 0 8px 20px rgba(0,0,0,.6); }
     #overlay h2 { font-size: 20px; font-weight: 500; margin: 0 0 24px; opacity: .9; }
     #overlay .route { font-size: 15px; opacity: .85; margin-bottom: 26px; line-height: 1.7; max-width: 640px; }
+    /* コースを OpenStreetMap に重ねた地図 (public/course-map.html) へのリンク */
+    #overlay .mapLink { margin: -16px 0 22px; font-size: 14px; }
+    #overlay .mapLink a { color: #ffd83d; }
     /* 縦の狭い窓でも収まるよう vh でも上限をかける (アスペクト比は width 基準で保たれる) */
     #titleMap { width: min(560px, 84vw, 62vh); height: auto; margin: 0 0 14px; }
     #overlay button { font-size: 24px; font-weight: 800; padding: 14px 48px; border: none; border-radius: 40px; background: linear-gradient(#ff5a5a, #c81e1e); color: #fff; cursor: pointer; box-shadow: 0 6px 0 #7d0f0f, 0 12px 24px rgba(0,0,0,.5); }
@@ -282,6 +285,7 @@
     <h2 data-en="Matsue Grand Prix — race the real city, built from MLIT's PLATEAU 3D city models">松江グランプリ — PLATEAU 3D都市モデル (国土交通省) で走る松江の街</h2>
     <canvas id="titleMap" width="1120" height="640"></canvas>
     <div class="route" data-en-html='Matsue Sta. → Kunibiki Bridge → Shimane Pref. Office → Matsue Castle → Shiomi Nawate → Matsue City Hall → Shinjiko Ohashi Bridge → Lake Shinji Sunset Spot → Matsue Sta.<br /><span style="opacity:.75;font-size:13px">9.6 km a lap, 2 laps. The racing line follows PLATEAU road data. Matsue Castle is PLATEAU&#39;s LOD3 model. Watch for trains at the level crossing — touch one and you spin out.</span>'>松江駅 → くにびき大橋 → 島根県庁 → 松江城 → 塩見縄手 → 松江市役所 → 宍道湖大橋 → 宍道湖夕日スポット → 松江駅<br /><span style="opacity:.75;font-size:13px">1周 9.6km × 2周 / 走行線は PLATEAU の道路データの上を通ります。松江城天守は PLATEAU の LOD3 モデル。踏切では電車に注意（接触するとスピン）</span></div>
+    <div class="mapLink" data-en-html='<a href="%BASE_URL%course-map.html" target="_blank" rel="noopener">View the course on the map (OpenStreetMap) ↗</a>'><a href="%BASE_URL%course-map.html" target="_blank" rel="noopener">コースを地図で見る（OpenStreetMap）↗</a></div>
     <div id="results">
       <table id="resultTable"></table>
       <div id="rankBox" style="display:none">
