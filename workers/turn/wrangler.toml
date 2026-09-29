@@ -1,11 +1,11 @@
-# TURN の資格情報を発行する Worker (worker.js の冒頭に説明)。3 サイトで 1 つを共有する
+# TURN の資格情報を発行する Worker (worker.js の冒頭に説明)。4 サイトで 1 つを共有する
 name = "citykart-turn"
 main = "worker.js"
 compatibility_date = "2025-09-01"
 
 [vars]
 # 呼び出しを許可するサイトの Origin (カンマ区切り)
-ALLOWED_ORIGINS = "https://matsue.citykart.jp,https://fukuyama.citykart.jp,https://hiroshima.citykart.jp"
+ALLOWED_ORIGINS = "https://matsue.citykart.jp,https://fukuyama.citykart.jp,https://hiroshima.citykart.jp,https://kure.citykart.jp"
 # 上流の呼び方。metered.ca は GET だけでよいので何も指定しない。
 # Cloudflare の TURN に切り替えるときは次の 2 行のコメントを外す (Bearer 認証の POST。
 # 本文の ttl が資格情報の有効期間 (秒) で、短いほど漏れたときの被害が小さい)

@@ -130,7 +130,7 @@ async function dailyStatus(env) {
 // ---- ランキング (ゴールタイム) ----
 import { isNgName } from './ngwords.js';
 //
-// サイトごと (matsue / fukuyama / hiroshima) に 1 つの Durable Object (Leaderboard) を持ち、
+// サイトごと (matsue / fukuyama / hiroshima / kure) に 1 つの Durable Object (Leaderboard) を持ち、
 // 速い順に RANK_KEEP 件だけ残す。サイトは Origin のホスト名の先頭で決める
 // (matsue.citykart.jp → matsue)。ページ側から送るのは名前とタイムだけ。
 //   GET    /ranking            → { entries: 上位 RANK_SHOW 件 }
@@ -146,9 +146,9 @@ const RANK_SHOW = 20;
 /**
  * これより速いタイムは受け付けない (秒)。カートの最高速 56 m/s にコイン・ブースト・むてきを
  * すべて重ねても毎秒 100 m 程度なので、レース全長 ÷ 100 m/s を目安に切り下げた値。
- * 松江 9.6 km × 2 周、広島 7.3 km × 2 周、福山 20.8 km の一本道。
+ * 松江 9.6 km × 2 周、広島 7.3 km × 2 周、福山 20.8 km の一本道、呉 12.2 km の一本道。
  */
-const MIN_TIME = { matsue: 180, hiroshima: 140, fukuyama: 200 };
+const MIN_TIME = { matsue: 180, hiroshima: 140, fukuyama: 200, kure: 120 };
 const MAX_TIME = 3600;
 
 /** Origin (https://matsue.citykart.jp) からサイト名 (matsue) を取る */
