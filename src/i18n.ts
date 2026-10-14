@@ -77,6 +77,7 @@ const JA: Dict = {
   'load.error': 'エラー: {0}（押すと再読み込み）',
   'load.blocked': 'データを読み込めませんでした。社内ネットワークやセキュリティソフトで遮断されているかもしれません。別の回線（スマホのモバイル回線など）で試してください（押すと再読み込み）',
   'gl.lost': '画面の描画が止まりました（GPU のメモリ不足など）。画質を下げると起きにくくなります。',
+  'gl.unavailable': 'このブラウザでは 3D 表示 (WebGL) が使えません。Chrome / Edge は設定の「グラフィック アクセラレーションが使用可能な場合は使用する」をオンにして再起動してください。スマホはほかのタブやアプリを閉じてから読み込み直してください。',
   'gl.reload': '再読み込み',
 
   'btn.solo': '1人PLAY',
@@ -168,6 +169,7 @@ const EN: Dict = {
   'load.error': 'Error: {0} (tap to reload)',
   'load.blocked': 'Could not load the game data. A company network or security software may be blocking it. Please try another connection, such as mobile data (tap to reload)',
   'gl.lost': 'Rendering stopped (the GPU may have run out of memory). A lower graphics setting makes this less likely.',
+  'gl.unavailable': 'This browser cannot show 3D graphics (WebGL). In Chrome / Edge, turn on "Use graphics acceleration when available" in Settings and restart the browser. On a phone, close other tabs and apps, then reload.',
   'gl.reload': 'Reload',
 
   'btn.solo': 'SOLO PLAY',

@@ -6,7 +6,8 @@
 //
 // 環境変数: TELEMETRY_URL (Worker の /telemetry。ページが送る先と同じ)、TELEMETRY_TOKEN (Worker の secret と同じ値)
 // 通知するのは kind が error (例外)・gl (WebGL のコンテキスト喪失) のものと、load のうち resource (読み込み失敗)。
-// 読み込み完了までの時間 (load ready) や対戦の記録 (net) は通知せず、末尾に件数だけ添える。
+// 読み込み完了までの時間 (load ready)・対戦の記録 (net)・WebGL が使えない環境 (gl unavailable) は
+// 通知せず、末尾に件数だけ添える。
 // --out のとき、GITHUB_OUTPUT があれば count (通知するエラーの件数) と last (最後の記録の番号) を書く。
 // 定期監視 (.github/workflows/monitor.yml) は count が 0 でなければ Issue に足し、そのあと last で --ack する。
 // 記録の中身は workers/turn/worker.js の cleanTelemetry が整えたもの (種類・内容・ビルド・画質・言語・パス・UA)。
@@ -17,9 +18,12 @@ import { pathToFileURL } from 'node:url';
 /** Issue に出す種類の上限 */
 const MAX_GROUPS = 20;
 
-/** 通知の対象か (例外・読み込み失敗・WebGL の喪失) */
+/**
+ * 通知の対象か (例外・読み込み失敗・WebGL の喪失)。
+ * WebGL がそもそも作れない (gl/unavailable) のは利用者の環境のせいで直しようがないので通知しない
+ */
 export function isErrorRecord(r) {
-  return r.kind === 'error' || r.kind === 'gl' || (r.kind === 'load' && r.event === 'resource');
+  return r.kind === 'error' || (r.kind === 'gl' && r.event !== 'unavailable') || (r.kind === 'load' && r.event === 'resource');
 }
 
 /** UA を「ブラウザ (端末)」に丸める。UA そのものは Issue に出さない */
@@ -92,6 +96,8 @@ export function summarize(records) {
   const ready = others.filter(r => r.kind === 'load' && r.event === 'ready').map(r => Number(r.data?.ms)).filter(Number.isFinite).sort((a, b) => a - b);
   if (ready.length) parts.push(`読み込み完了 ${ready.length} 件 (中央値 ${(ready[Math.floor(ready.length / 2)] / 1000).toFixed(1)} 秒)`);
   for (const [event, c] of tally(others.filter(r => r.kind === 'net').map(r => r.event))) parts.push(`net ${event} ${c} 件`);
+  const noGl = others.filter(r => r.kind === 'gl').length;
+  if (noGl) parts.push(`WebGL が使えない環境 ${noGl} 件`);
   if (parts.length) lines.push(`同じ期間のほかの記録: ${parts.join('、')}`);
 
   return { count: errors.length, markdown: lines.join('\n').trimEnd() + '\n' };

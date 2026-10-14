@@ -74,6 +74,7 @@ describe('本番の記録のまとめ (tools/telemetry_report.mjs)', () => {
   it('通知するのは例外・読み込み失敗・WebGL の喪失', () => {
     expect(isErrorRecord({ kind: 'error', event: 'main' })).toBe(true);
     expect(isErrorRecord({ kind: 'gl', event: 'contextlost' })).toBe(true);
+    expect(isErrorRecord({ kind: 'gl', event: 'unavailable' })).toBe(false);
     expect(isErrorRecord({ kind: 'load', event: 'resource' })).toBe(true);
     expect(isErrorRecord({ kind: 'load', event: 'ready' })).toBe(false);
     expect(isErrorRecord({ kind: 'net', event: 'presence' })).toBe(false);
@@ -93,6 +94,7 @@ describe('本番の記録のまとめ (tools/telemetry_report.mjs)', () => {
       { kind: 'load', event: 'ready', data: { ms: 8000 } },
       { kind: 'load', event: 'ready', data: { ms: 4000 } },
       { kind: 'net', event: 'presence', data: { others: 1 } },
+      { kind: 'gl', event: 'unavailable', data: { message: 'Error creating WebGL context.' } },
     ];
     const { count, markdown } = summarize(records);
     expect(count).toBe(4);
@@ -103,7 +105,7 @@ describe('本番の記録のまとめ (tools/telemetry_report.mjs)', () => {
     expect(markdown).toContain('Chrome (PC), Safari (スマホ)');
     expect(markdown).toContain('画質: high, low');
     expect(markdown).toContain('at x (a.js:1:2)');
-    expect(markdown).toContain('読み込み完了 2 件 (中央値 8.0 秒)、net presence 1 件');
+    expect(markdown).toContain('読み込み完了 2 件 (中央値 8.0 秒)、net presence 1 件、WebGL が使えない環境 1 件');
     expect(markdown).not.toContain('Mozilla');
   });
   it('エラーが無ければ何も書かない', () => {

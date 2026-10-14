@@ -153,7 +153,9 @@ async function main() {
   const turnListed = dbg.get('debug') ? false : await turnConfigured();
   if (netConsent) await startNet();
   // 低画質では MSAA も切る (内蔵 GPU では帯域を食う)
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.level !== 'low', powerPreference: 'high-performance' });
+  const made = createRenderer(canvas, quality.level !== 'low');
+  if (!made) return;   // WebGL が使えない。案内は createRenderer が出した
+  const renderer = made;
   watchContextLoss(canvas);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1073,6 +1075,32 @@ function makeHills(terrain: Terrain): THREE.Mesh {
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
   return mesh;
+}
+
+/**
+ * 描画器を作る。WebGL のコンテキストが作れないのはこちらの不具合ではなく環境のせい
+ * (Chrome でハードウェア アクセラレーションが切れている・GPU がブロックリストに入っている
+ * ・iPhone でメモリやほかのタブの WebGL が詰まっているなど) なので、MSAA を切った軽い設定で
+ * 一度だけやり直す。それでも作れなければ直し方を出して止まる (読み込み直しても直らないため、
+ * 「押すと再読み込み」のエラー表示にはしない)。記録は通知しない種類 gl/unavailable で残す。
+ */
+function createRenderer(canvas: HTMLCanvasElement, antialias: boolean): THREE.WebGLRenderer | null {
+  try {
+    return new THREE.WebGLRenderer({ canvas, antialias, powerPreference: 'high-performance' });
+  } catch { /* 下で軽い設定を試す */ }
+  try {
+    return new THREE.WebGLRenderer({ canvas, antialias: false });
+  } catch (e) {
+    report('gl', 'unavailable', { message: e instanceof Error ? e.message : String(e) });
+    const box = document.getElementById('glLost');
+    if (!box) throw e;
+    document.getElementById('glLostMsg')!.textContent = t('gl.unavailable');
+    const b = document.getElementById('glLostBtn') as HTMLButtonElement;
+    b.textContent = t('gl.reload');
+    b.onclick = () => location.reload();
+    box.style.display = 'flex';
+    return null;
+  }
 }
 
 /**
