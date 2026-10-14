@@ -75,6 +75,7 @@ const JA: Dict = {
   'load.lod2Shape': 'LOD2 形状を読み込み中...',
   'load.lod2Tex': 'LOD2 テクスチャ {0}/{1}',
   'load.error': 'エラー: {0}（押すと再読み込み）',
+  'load.blocked': 'データを読み込めませんでした。社内ネットワークやセキュリティソフトで遮断されているかもしれません。別の回線（スマホのモバイル回線など）で試してください（押すと再読み込み）',
   'gl.lost': '画面の描画が止まりました（GPU のメモリ不足など）。画質を下げると起きにくくなります。',
   'gl.reload': '再読み込み',
 
@@ -165,6 +166,7 @@ const EN: Dict = {
   'load.lod2Shape': 'Loading LOD2 geometry...',
   'load.lod2Tex': 'LOD2 textures {0}/{1}',
   'load.error': 'Error: {0} (tap to reload)',
+  'load.blocked': 'Could not load the game data. A company network or security software may be blocking it. Please try another connection, such as mobile data (tap to reload)',
   'gl.lost': 'Rendering stopped (the GPU may have run out of memory). A lower graphics setting makes this less likely.',
   'gl.reload': 'Reload',
 

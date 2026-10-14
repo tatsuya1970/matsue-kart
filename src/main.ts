@@ -17,7 +17,7 @@ import { loadLod2 } from './lod2';
 import { rng, lerp, clamp, assetUrl, WAYPOINTS, llToXZ } from './geo';
 import { resolveQuality, saveQuality, allPresets, type QualityLevel } from './quality';
 import { t, lang, isJa, setLang, applyDomLang } from './i18n';
-import { fetchJson } from './fetch';
+import { fetchJson, FetchError } from './fetch';
 import { installErrorHandlers, report, reportError, setTelemetryContext } from './telemetry';
 import { storageGet, storageSet } from './storage';
 
@@ -1101,7 +1101,10 @@ main().catch(e => {
   reportError('main', e);
   // 読み込みに失敗したら押して読み込み直せるようにする (無効のままだと手詰まりになる)
   const b = document.getElementById('startBtn') as HTMLButtonElement;
-  b.textContent = t('load.error', e instanceof Error ? e.message : String(e));
+  // 再試行しても 401/403/407/451 が続くのは、配信側ではなく利用者の回線 (社内プロキシ・
+  // セキュリティソフトなど) が止めていることが多い。原因と回避策を伝える
+  const blocked = e instanceof FetchError && [401, 403, 407, 451].includes(e.status);
+  b.textContent = blocked ? t('load.blocked') : t('load.error', e instanceof Error ? e.message : String(e));
   b.disabled = false;
   b.onclick = () => location.reload();
 });
