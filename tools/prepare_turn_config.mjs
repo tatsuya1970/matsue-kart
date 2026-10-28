@@ -33,8 +33,17 @@ if (publicConfig?.url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(10000), headers: apiHeaders(siteOrigin) });
   // 念のためログには場所だけ出す (validateConfigUrl が鍵付きの URL を止めているが、見落とし対策)
   const where = `${new URL(url).origin}${new URL(url).pathname}`;
-  if (!res.ok) throw new Error(`TURN 設定 API が HTTP ${res.status} を返しました: ${where}${res.status === 403 && !siteOrigin ? ' (public/CNAME が無く Origin を名乗れない)' : ''}`);
-  validateTurnServers(await res.json());
+  const body = res.ok ? '' : (await res.text().catch(() => '')).slice(0, 200);
+  if (res.status === 503 && body.includes('daily_cap')) {
+    // 1 日の発行上限に達しているのは Worker が動いている証拠で、配信物の欠陥ではない。
+    // ここで止めると、上限に達した日 (誰かに叩かれた日など) に修正を配信できなくなるので通す。
+    // 上限そのものは定期監視 (monitor.yml) が失敗として知らせる
+    console.warn(`::warning::TURN 設定 API が 1 日の発行上限に達しています (${body})。設定はそのまま書き出します: ${where}`);
+  } else if (!res.ok) {
+    throw new Error(`TURN 設定 API が HTTP ${res.status} を返しました: ${where}${res.status === 403 && !siteOrigin ? ' (public/CNAME が無く Origin を名乗れない)' : ''}`);
+  } else {
+    validateTurnServers(await res.json());
+  }
 } else {
   validateTurnServers(rejectStaticCredential(publicConfig));
 }

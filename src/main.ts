@@ -22,6 +22,8 @@ import { installErrorHandlers, report, reportError, setTelemetryContext } from '
 import { storageGet, storageSet } from './storage';
 
 installErrorHandlers();
+// 本体が動き出した印。index.html の起動の見張りが、これが立たないまま時間が過ぎると案内を出す
+(window as unknown as { __booted?: boolean }).__booted = true;
 
 // 1 周約 9km × 2 周 (広島版は 7.3km × 2 周)
 const LAPS = 2;
@@ -90,6 +92,13 @@ function goLandscape(): void {
 }
 
 async function main() {
+  // 起動の見張り (index.html) が先に失敗の案内を出していた (遅い回線で本体が後から動き出した) なら戻す
+  const bootBtn = document.getElementById('startBtn') as HTMLButtonElement | null;
+  if (bootBtn?.dataset.bootText) {
+    bootBtn.textContent = bootBtn.dataset.bootText;
+    bootBtn.disabled = true;
+    bootBtn.onclick = null;
+  }
   applyDomLang();
   const canvas = document.getElementById('game') as HTMLCanvasElement;
   const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -305,12 +314,15 @@ async function main() {
   let net: NetSession | null = null;
   let mySlot = 0;
 
-  /** そのカートを自分の画面で動かしてよいか (自分のカート + ホストなら空き枠の AI) */
+  /**
+   * そのカートを自分の画面で動かしてよいか (自分のカート + ホストなら空き枠の AI と、
+   * レース中に抜けた人の席。抜けた人の席はホストが AI として最後まで走らせる。net.ts の slotOwner)
+   */
   function isLocal(k: Kart): boolean {
     if (!net) return true;
     const i = karts.indexOf(k);
     if (i === mySlot) return true;
-    return net.isHost && i >= net.order.length;
+    return net.ownerOf(i) === net.selfId;
   }
 
   // ---- イベント ----
@@ -723,6 +735,7 @@ async function main() {
       if (!k || isLocal(k)) continue;
       if (!k.hasNet) { k.x = p.x; k.z = p.z; k.y = p.y; k.heading = p.heading; }
       k.hasNet = true;
+      k.netAge = 0;
       k.netX = p.x; k.netZ = p.z; k.netY = p.y; k.netHeading = p.heading; k.netSpeed = p.speed;
       k.drifting = p.drifting; k.lap = p.lap; k.s = p.s;
       if (p.spin > k.spinTimer) { k.spinTimer = p.spin; }

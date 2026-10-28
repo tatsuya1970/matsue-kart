@@ -249,14 +249,20 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 /**
  * その席のカートを動かしてよい人。人の席は座席表の order[slot]、空き枠 (AI) はホスト。
  * 席が範囲外・未定なら '' (誰にも渡さない)。
+ * here (部屋にいる全員の ID) を渡すと、席の持ち主が部屋にいない席もホストのものにする。
+ * レース中は座席表を配り直さないので、途中で抜けた人の席はそのまま残る。誰も動かさないと
+ * そのカートは最後に届いた位置で止まったままになるので、ホストが AI として引き継ぐ。
+ * 持ち主が戻ってきたら (つなぎ直し) また持ち主のものに戻る。
  *
  * 受信側はこれと送り主を照合する。照合しないと、改造したクライアントが他人の席の
  * ゴール・被弾・アイテム使用や位置を送れてしまう (自分の席に届いた fin で自分の
  * カートが AI 操作へ切り替わり、リザルトでは 0 秒で 1 位になる)。
  */
-export function slotOwner(order: string[], host: string, slot: unknown): string {
+export function slotOwner(order: string[], host: string, slot: unknown, here?: readonly string[]): string {
   if (!Number.isInteger(slot) || (slot as number) < 0 || (slot as number) >= MAX_SLOTS) return '';
-  return (slot as number) < order.length ? order[slot as number] : host;
+  if ((slot as number) >= order.length) return host;
+  const id = order[slot as number];
+  return here && !here.includes(id) ? host : id;
 }
 
 /**
@@ -264,13 +270,13 @@ export function slotOwner(order: string[], host: string, slot: unknown): string 
  * 配列は POSE_LEN の倍数で、最大でも全枠分。値はすべて有限の数 (NaN / Infinity を
  * 入れると、受け取った側でそのカートが消えたり順位の計算が崩れたりする)。
  */
-export function parsePoses(d: unknown, sender: string, order: string[], host: string): Pose[] {
+export function parsePoses(d: unknown, sender: string, order: string[], host: string, here?: readonly string[]): Pose[] {
   if (!Array.isArray(d) || !d.length || d.length % POSE_LEN !== 0 || d.length > POSE_LEN * MAX_SLOTS) return [];
   if (!d.every(finite)) return [];
   const out: Pose[] = [];
   for (let i = 0; i < d.length; i += POSE_LEN) {
     const p = unpackPose(d as number[], i);
-    if (slotOwner(order, host, p.slot) === sender && poseInRange(p)) out.push(p);
+    if (slotOwner(order, host, p.slot, here) === sender && poseInRange(p)) out.push(p);
   }
   return out;
 }
@@ -330,10 +336,10 @@ const FIN_MIN = 60;
 const FIN_MAX = 3600;
 
 /** 受信したイベントを検査する。形が違う・持ち主でない席・知らないアイテムは null */
-export function parseEvent(d: unknown, sender: string, order: string[], host: string): NetEvent | null {
+export function parseEvent(d: unknown, sender: string, order: string[], host: string, here?: readonly string[]): NetEvent | null {
   if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
   const e = d as Record<string, unknown>;
-  const owner = slotOwner(order, host, e.slot);
+  const owner = slotOwner(order, host, e.slot, here);
   if (!owner || owner !== sender) return null;
   const s = e.slot as number;
   switch (e.t) {
@@ -540,14 +546,14 @@ export class NetSession {
     this.pose = this.room.makeAction<JsonValue>('pose', {
       onMessage: (d, ctx) => {
         if (!this.gates.pose.allow(ctx.peerId)) return;
-        const out = parsePoses(d, ctx.peerId, this.order, this.host);
+        const out = parsePoses(d, ctx.peerId, this.order, this.host, this.peerIds());
         if (out.length) handlers.onPose(out);
       },
     });
     this.ev = this.room.makeAction<JsonValue>('ev', {
       onMessage: (d, ctx) => {
         if (!this.gates.ev.allow(ctx.peerId)) return;
-        const e = parseEvent(d, ctx.peerId, this.order, this.host);
+        const e = parseEvent(d, ctx.peerId, this.order, this.host, this.peerIds());
         if (e) handlers.onEvent(e);
       },
     });
@@ -588,6 +594,11 @@ export class NetSession {
   /** 自分のカートの枠。まだ席が決まっていなければ -1 */
   get mySlot(): number {
     return this.order.indexOf(selfId);
+  }
+
+  /** その席のカートを動かしてよい人 (席の持ち主が部屋にいなければホスト。slotOwner) */
+  ownerOf(slot: number): string {
+    return slotOwner(this.order, this.host, slot, this.peerIds());
   }
 
   /** ホストが座席順を決めて配る。既に決まっている席は動かさない (レース中の入れ替え防止) */

@@ -10,6 +10,8 @@ export const MAX_SPEED = 56; // m/s (約 200 km/h)
 const ACCEL = 20;
 const BRAKE = 34;
 const REVERSE_MAX = -10;
+/** オンライン対戦で、位置が届かないあいだ他人のカートを前へ進める上限 (秒)。受信は 15Hz なので普段は 0.07 秒ごとに戻る */
+export const NET_EXTRAPOLATE_SEC = 0.5;
 
 export interface RacerDef {
   name: string;
@@ -58,6 +60,8 @@ export class Kart {
   // オンライン対戦: 他人が動かすカートの受信位置
   netX = 0; netZ = 0; netY = 0; netHeading = 0; netSpeed = 0;
   hasNet = false;
+  /** 最後に位置を受け取ってから外挿で進めた時間 (秒)。受け取るたびに 0 に戻す */
+  netAge = 0;
 
   constructor(def: RacerDef) {
     this.def = def;
@@ -247,11 +251,20 @@ export class Kart {
    * 受信は 15Hz 程度なので、受け取った位置を速度で前へ進めながら (デッドレコニング)
    * 表示位置をそこへ寄せる。物理は回さない。回すと相手の画面と食い違い、
    * ぶつかってもいないのに弾かれて見えるため。
+   *
+   * 前へ進めるのは受け取ってから NET_EXTRAPOLATE_SEC まで。相手がタブを裏にしたり回線が
+   * 切れたりして位置が途絶えたとき、そのまま進め続けるとカートが建物を突き抜けて直進していく。
+   * 打ち切ったら最後の位置で止めて待つ (次に届いた位置へ寄せ直す)。
    */
   netApply(dt: number, track: Track) {
     if (!this.hasNet) return;
-    this.netX += Math.cos(this.netHeading) * this.netSpeed * dt;
-    this.netZ += Math.sin(this.netHeading) * this.netSpeed * dt;
+    const stale = this.netAge >= NET_EXTRAPOLATE_SEC;
+    if (!stale) {
+      const step = Math.min(dt, NET_EXTRAPOLATE_SEC - this.netAge);
+      this.netX += Math.cos(this.netHeading) * this.netSpeed * step;
+      this.netZ += Math.sin(this.netHeading) * this.netSpeed * step;
+      this.netAge += dt;
+    }
     const k = Math.min(1, dt * 9);
     this.x = lerp(this.x, this.netX, k);
     this.z = lerp(this.z, this.netZ, k);
@@ -259,7 +272,7 @@ export class Kart {
     let d = this.netHeading - this.heading;
     d = Math.atan2(Math.sin(d), Math.cos(d));
     this.heading += d * k;
-    this.speed = this.netSpeed;
+    this.speed = stale ? 0 : this.netSpeed;
     this.spinTimer = Math.max(0, this.spinTimer - dt);
     if (this.spinTimer > 0) this.spinAngle += dt * 9;
     this.boostTimer = Math.max(0, this.boostTimer - dt);

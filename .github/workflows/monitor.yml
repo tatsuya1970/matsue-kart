@@ -33,6 +33,8 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # 止まったまま concurrency: monitor を握り続けて、後の実行を待たせないように
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -48,33 +50,43 @@ jobs:
         # 失敗しても先へ進み (通知してから)、最後のステップでジョブを失敗にする。
         # shell: bash を明示すると pipefail が付き、tee を挟んでも node の失敗が伝わる
         continue-on-error: true
+        # 本番が応答しないまま待ち続けても、ここで打ち切って失敗として通知へ進む
+        timeout-minutes: 15
         shell: bash
         run: node tools/check_site.mjs "$SITE_URL" --relays 2>&1 | tee site.log
 
       - name: Collect browser errors
         id: telemetry
+        # Worker が落ちていると、ここも外形監視と一緒に失敗する。そのときも下の
+        # 「Report site failure」まで進めるよう、失敗しても先へ進む (最後にジョブを失敗にする)
+        continue-on-error: true
+        timeout-minutes: 3
         run: node tools/telemetry_report.mjs --site "$SITE" --out telemetry.md
         env:
           TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
           TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_TOKEN }}
 
+      # if に always() を付けないと、暗黙に success() && が付き、前のどれかが失敗しただけで飛ばされる
       - name: Report site failure
-        if: steps.site.outcome == 'failure'
+        if: always() && steps.site.outcome == 'failure'
         run: node tools/alert_issue.mjs open --title "本番の外形監視が失敗しています" --text "$SITE_URL の点検が失敗しました。直るまで 3 時間おきにここへ足します。" --log site.log --run "$RUN_URL"
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Close site issue on recovery
-        if: steps.site.outcome == 'success'
+        if: always() && steps.site.outcome == 'success'
         run: node tools/alert_issue.mjs close --title "本番の外形監視が失敗しています" --text "点検が通るようになりました。" --run "$RUN_URL"
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Report browser errors
-        if: steps.telemetry.outputs.count != '0'
+        id: report_errors
+        if: always() && steps.telemetry.outcome == 'success' && steps.telemetry.outputs.count != '0'
         run: node tools/alert_issue.mjs open --title "利用者のブラウザでエラーが起きています" --body-file telemetry.md --run "$RUN_URL"
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Mark browser records as notified
+        # Issue に足せなかったときは通知済みにしない (次の回にもう一度足す)
+        if: always() && steps.telemetry.outcome == 'success' && steps.report_errors.outcome != 'failure'
         run: node tools/telemetry_report.mjs --site "$SITE" --ack "${{ steps.telemetry.outputs.last }}"
         env:
           TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
@@ -85,6 +97,6 @@ jobs:
         run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/monitor.yml/enable"
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Fail when the site check failed
-        if: steps.site.outcome == 'failure'
+      - name: Fail when a check failed
+        if: always() && (steps.site.outcome == 'failure' || steps.telemetry.outcome == 'failure')
         run: exit 1

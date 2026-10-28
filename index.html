@@ -3,6 +3,63 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <script>
+    // 起動の見張り。ゲーム本体 (type="module" の JS) が読めない・古いブラウザで構文エラーになる・
+    // 評価の途中で落ちると、本体の中にあるエラー表示も記録 (src/telemetry.ts) も動かず、ボタンが
+    // 「読み込み中...」のまま止まってどこにも知らされない。本体とは別のこのスクリプトが見張り、
+    // 直し方を出して記録を送る。本体は動き出したら window.__booted を立てる (src/main.ts の先頭)。
+    // 本体が動かない古いブラウザでこそ要るので ES5 で書く。
+    (function () {
+      var done = false, waits = 0;
+      function lang() {
+        var q = /[?&]lang=(ja|en)\b/.exec(location.search), saved = null;
+        try { saved = localStorage.getItem('mk.lang'); } catch (e) { /* 使えない環境 */ }
+        if (q) return q[1];
+        if (/\/en\/$/.test(location.pathname.replace(/\/?$/, '/'))) return 'en';
+        if (saved === 'ja' || saved === 'en') return saved;
+        return /^ja/i.test(navigator.language || '') ? 'ja' : 'en';
+      }
+      function failed(why) {
+        if (done || window.__booted) return;
+        var b = document.getElementById('startBtn');
+        if (!b) { document.addEventListener('DOMContentLoaded', function () { failed(why); }); return; }
+        done = true;
+        var ja = lang() === 'ja';
+        b.setAttribute('data-boot-text', b.textContent);   // 遅れて本体が動き出したら main.ts が戻す
+        b.textContent = ja
+          ? 'ゲームを起動できませんでした。押すと読み込み直します（直らないときはブラウザを最新版にしてください）'
+          : 'The game could not start. Tap to reload (if this keeps happening, please update your browser)';
+        b.disabled = false;
+        b.onclick = function () { location.reload(); };
+        // 記録の送り先はビルド時に埋め込む (vite が %VITE_TELEMETRY_URL% を置き換える。未設定なら送らない)
+        var url = '%VITE_TELEMETRY_URL%';
+        if (/^https:\/\//.test(url) && navigator.sendBeacon && window.Blob) {
+          try {
+            var rec = { kind: 'error', event: 'boot', data: { message: why }, at: window.performance ? Math.round(performance.now()) : 0, path: location.pathname, ua: navigator.userAgent, lang: ja ? 'ja' : 'en' };
+            navigator.sendBeacon(url, new Blob([JSON.stringify(rec)], { type: 'text/plain' }));
+          } catch (e) { /* 記録の失敗は無視する */ }
+        }
+      }
+      // 本体の JS が取れなかった (404・回線) / 本体が動き出す前に本体の中で例外が出た (構文エラーなど)。
+      // 拡張機能などほかの出どころの例外では騒がないよう、同じオリジンのファイルのものだけを見る
+      addEventListener('error', function (e) {
+        var t = e.target;
+        if (t && t.tagName === 'SCRIPT') { if (t.type === 'module') failed('script load: ' + String(t.src).replace(/[?#].*$/, '')); return; }
+        if (e.filename && e.filename.indexOf(location.origin + '/') === 0) failed('error: ' + String(e.message || '').slice(0, 300));
+      }, true);
+      // module に対応していないブラウザは本体を読みもしない
+      if (!('noModule' in document.createElement('script'))) failed('module unsupported');
+      // どれにも当たらないまま動き出さないとき。本体の JS がまだ届いていないだけなら (遅い回線) 待つ
+      function check() {
+        if (window.__booted) return;
+        var s = document.querySelector('script[type="module"][src]');
+        var fetched = s && window.performance && performance.getEntriesByName && performance.getEntriesByName(s.src).length > 0;
+        if (!fetched && waits++ < 3) { setTimeout(check, 30000); return; }
+        failed(fetched ? 'not started' : 'script not fetched');
+      }
+      setTimeout(check, 30000);
+    })();
+  </script>
   <!-- ==== SEO:ja ====
        言語ごとの見出し・説明・カード。英語版は /en/ に同じ体裁で置いてあり、
        tools/build_en_page.mjs がビルド後にこのブロックを英語版へ差し替えて書き出す。

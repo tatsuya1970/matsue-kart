@@ -51,6 +51,7 @@ jobs:
       - name: Validate TURN configuration
         # オンライン対戦を出す本番では TURN 無しを許可しない。設定 API も実際に
         # turn:/turns: の ICE server を返すところまで確認してから成果物へ入れる。
+        # 1 日の発行上限に達しているときだけは警告にして通す (上限に達した日にも修正を配信できるように)
         run: npm run turn:prepare
         env:
           TURN_CONFIG_URL: ${{ vars.TURN_CONFIG_URL }}
@@ -83,9 +84,11 @@ jobs:
         uses: actions/deploy-pages@v4
 
   smoke:
-    # 配信された版を外から確かめる。CDN に行き渡るまで最大 10 分待つ
+    # 配信された版を外から確かめる。CDN に行き渡るまで最大 10 分待つ。
+    # TURN の 1 日の発行上限に達しているのは警告にとどめる (--allow-daily-cap。上限は定期監視が知らせる)
     needs: [build, deploy]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,4 +96,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node tools/check_site.mjs "${{ needs.deploy.outputs.page_url }}" --commit "${{ needs.build.outputs.commit }}" --wait 600
+      - run: node tools/check_site.mjs "${{ needs.deploy.outputs.page_url }}" --commit "${{ needs.build.outputs.commit }}" --wait 600 --allow-daily-cap

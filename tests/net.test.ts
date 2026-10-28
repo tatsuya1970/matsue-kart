@@ -116,6 +116,21 @@ describe('席の持ち主だけが位置とイベントを送れる', () => {
     expect(net.parseEvent({ t: 'hit', slot: 4 }, 'b', order, host)).toBeNull();
   });
 
+  it('レース中に抜けた人の席はホストのものになり、戻ってきたら持ち主に戻る', () => {
+    const three = ['a', 'b', 'c'];
+    // c が抜けた (部屋にいるのは a と b)
+    expect(net.slotOwner(three, 'a', 2, ['a', 'b'])).toBe('a');
+    expect(net.slotOwner(three, 'a', 1, ['a', 'b'])).toBe('b');
+    expect(net.parsePoses(pose(2), 'a', three, 'a', ['a', 'b'])).toHaveLength(1);    // ホストが AI として動かす
+    expect(net.parsePoses(pose(2), 'b', three, 'a', ['a', 'b'])).toEqual([]);
+    expect(net.parseEvent({ t: 'hit', slot: 2 }, 'a', three, 'a', ['a', 'b'])).toEqual({ t: 'hit', slot: 2 });
+    // c が戻ってきた
+    expect(net.slotOwner(three, 'a', 2, ['a', 'b', 'c'])).toBe('c');
+    expect(net.parsePoses(pose(2), 'a', three, 'a', ['a', 'b', 'c'])).toEqual([]);
+    // ホストの a が抜けたら、次のホスト b が a の席も引き継ぐ
+    expect(net.slotOwner(three, 'b', 0, ['b', 'c'])).toBe('b');
+  });
+
   it('ev: 形の違うもの・知らないアイテム・有限でない値は捨てる', () => {
     const use = { t: 'use', slot: 1, item: 'shell', x: 1, z: 2, y: 3, heading: 0.1, speed: 30 };
     expect(net.parseEvent(use, 'b', order, host)).toEqual(use);

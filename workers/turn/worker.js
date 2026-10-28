@@ -8,17 +8,21 @@
 // 守れること / 守れないこと:
 //   - 鍵はブラウザに渡らない。差し替えも Worker の secret だけで済む。
 //   - 他のサイトのページからは呼べない (Origin と CORS)。ただし curl は Origin を
-//     偽れるので、上流を叩く回数は RATE_LIMITER (wrangler.toml) と短時間の
-//     キャッシュで抑える。キャッシュは独自ドメインに載せたときだけ効く
-//     (*.workers.dev では Cache API は何もしない)。
-//   - 資格情報そのものの有効期限は上流で決まる。短くできるなら短くする。
-//   - 1 日 (日本時間) に上流へ発行してもらう回数に上限を掛ける (DAILY_CAP)。上限に達した
-//     日は 503 を返し、サイト側は TURN が取れないので対戦PLAY を出さない。翌日 0 時に戻る。
-//     これで「資格情報を大量に取られる」ことは防げるが、1 つの資格情報で有効期間の
-//     あいだに流せる量までは縛れない (それは上流の仕様)。費用の上限は上流のプランで
-//     決める: metered.ca の無料プランはカード登録が無く、枠を超えても請求は無い。
-//     数は Durable Object (DailyCounter) で数える。いまの数は GET /status で見られる
-//     (Origin 不要、秘密は出ない)。
+//     偽れるので、1 つの IP からの回数を RATE_LIMITER (wrangler.toml) で抑える。
+//   - 上流の応答は Durable Object (DailyCounter) に ICE_TTL_SEC (1 時間) 保存して配り回す。
+//     metered.ca の資格情報は固定 (既定では期限切れにならない) なので、毎回上流に聞いても
+//     同じものが返るだけで、聞く回数を増やしても守れるものは無い。上流を呼ぶのは 1 時間に
+//     1 回ほどになり、誰かが叩き続けても下の上限には届かない。保存した応答は TURN_API_URL などの
+//     設定と組にしてあるので、資格情報を作り直して secret を入れ替えれば次の要求から新しい方を配る。
+//   - 資格情報そのものの有効期限は上流で決まる。短くできるなら短くする (Cloudflare の TURN に
+//     切り替えるなら ttl を ICE_TTL_SEC より十分長くする)。
+//   - 1 日 (日本時間) に上流へ発行してもらう回数に上限を掛ける (DAILY_CAP)。数えるのは
+//     上流が正しく応答した回だけで、普段は 1 日 24 回ほど。保存が効かなくなったときの保険で、
+//     上限に達した日は 503 を返し、サイト側は TURN が取れないので対戦PLAY を出さない。翌日 0 時に戻る。
+//     1 つの資格情報で有効期間のあいだに流せる量までは縛れない (それは上流の仕様)。費用の上限は
+//     上流のプランで決める: metered.ca の無料プランはカード登録が無く、枠を超えても請求は無い。
+//   - 上流が失敗したら、FAIL_TTL_SEC (30 秒) は上流を呼ばずに同じ失敗を返す (障害中に叩き続けない)。
+//     いまの数と、応答を保存した時刻は GET /status で見られる (Origin 不要、秘密は出ない)。
 //
 // 使い方 (1 つの Worker を 3 サイトで共有する。上流は metered.ca の無料プラン):
 //   metered.ca でアプリと TURN の資格情報 (credential) を 1 つ作り、その行の「Show API Key」の
@@ -35,8 +39,12 @@
 // ほかに、ゴールタイムのランキング (/ranking) と本番で起きたことの記録 (/telemetry) も
 // この Worker が受ける (下のそれぞれの節に説明)。
 
-/** 上流の応答をこの秒数だけ使い回す (同じ資格情報を配っても構わない) */
+/** Worker の Cache API で応答を使い回す秒数 (独自ドメインに載せたときだけ効く。*.workers.dev では何もしない) */
 const CACHE_SEC = 60;
+/** 上流の応答を DailyCounter に保存して配り回す秒数 (同じ資格情報を配っても構わない) */
+export const ICE_TTL_SEC = 3600;
+/** 上流が失敗したあと、上流を呼ばずに同じ失敗を返す秒数 */
+export const FAIL_TTL_SEC = 30;
 
 /** ICE サーバーの一覧に turn: / turns: があるか (tools/turn_config.mjs と同じ判定) */
 function hasTurnServer(list) {
@@ -81,50 +89,117 @@ export function nextJstMidnight(now = Date.now()) {
 }
 
 /**
- * 1 日の発行回数を数える Durable Object。1 つだけ作り (idFromName('turn'))、
- * 全リクエストがここを通るので数え漏れも数え過ぎもない (同じ Object の処理は直列)。
- *   POST /take   { day, limit } → { ok, count }   上限内なら 1 増やして ok
- *   GET  /status                → { day, count }
+ * 上流の設定 (呼び方・URL・鍵・本文) の指紋。保存した応答がいまの設定で取ったものかを見分ける。
+ * 資格情報を作り直して secret を入れ替えたら、保存分を捨てて上流に聞き直すため (secret そのものは保存しない)
+ */
+export async function iceSource(env) {
+  const text = [env.TURN_API_METHOD, env.TURN_API_URL, env.TURN_API_TOKEN, env.TURN_API_BODY].map(v => v ?? '').join('\n');
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 上流 (metered.ca など) に ICE サーバーの一覧を聞く。→ { ok: true, iceServers } / { ok: false, error: 'upstream', message } */
+export async function fetchIceServers(env) {
+  const failed = message => ({ ok: false, error: 'upstream', message });
+  if (!env.TURN_API_URL) return failed('TURN_API_URL is not set');
+  const init = { method: env.TURN_API_METHOD || 'GET', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10000) };
+  if (env.TURN_API_TOKEN) init.headers.authorization = `Bearer ${env.TURN_API_TOKEN}`;
+  if (env.TURN_API_BODY) { init.body = env.TURN_API_BODY; init.headers['content-type'] = 'application/json'; }
+  let upstream;
+  try {
+    upstream = await fetch(env.TURN_API_URL, init);
+  } catch (e) {
+    return failed(`upstream unreachable: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!upstream.ok) return failed(`upstream HTTP ${upstream.status}`);
+  let servers;
+  try {
+    servers = normalize(await upstream.json());
+  } catch {
+    return failed('upstream returned non-JSON');
+  }
+  // STUN だけの応答は配らない (サイト側は TURN があるかで対戦PLAY の可否を決める)
+  if (!hasTurnServer(servers)) return failed('upstream returned no turn: server');
+  return { ok: true, iceServers: servers };
+}
+
+/**
+ * 上流の応答を保存して配り回し、上流に発行してもらった回数を 1 日単位で数える Durable Object。
+ * 1 つだけ作り (idFromName('turn'))、全リクエストがここを通る (同じ Object の処理は直列)。
+ *   POST /ice { limit } → { ok: true, iceServers }
+ *                         / { ok: false, error: 'daily_cap', count } / { ok: false, error: 'upstream', message }
+ *   GET  /status        → { day, count, cachedAt }
+ * 保存した応答が ICE_TTL_SEC より新しく、いまの設定で取ったものなら、上流を呼ばずにそれを返す。
+ * 古ければ上流を呼び、正しく応答したときだけ数を 1 増やす (上流の障害で上限を使い切らないように)。
+ * 失敗したら FAIL_TTL_SEC のあいだは上流を呼ばずに同じ失敗を返す。上流を呼んでいる最中に
+ * 来た要求は、その 1 回の結果に相乗りする (同時に何本も上流を呼ばない)。
+ * 名前は 1 日の回数だけを数えていたころのまま (変えるには Durable Object の移行が要る)。
  * cloudflare:workers の DurableObject を継承しない fetch 方式にしてあるのは、
  * Node でそのまま読み込んで動作確認できるようにするため (tools/ の検査と同じ流儀)。
  */
 export class DailyCounter {
-  constructor(state) {
+  constructor(state, env) {
     this.storage = state.storage;
+    this.env = env ?? {};
+    /** 上流を呼んでいる最中の Promise */
+    this.pending = null;
+    /** 直近の上流の失敗 { at, message } */
+    this.failure = null;
+    /** いまの設定の指紋 (iceSource)。設定は Object が生きているあいだ変わらない */
+    this.source = '';
   }
   async fetch(request) {
     const url = new URL(request.url);
-    const stored = (await this.storage.get(['day', 'count']));
-    const day = stored.get('day');
-    const count = stored.get('count') ?? 0;
-    if (request.method === 'POST' && url.pathname === '/take') {
-      const body = await request.json();
-      const cur = body.day === day ? count : 0;   // 日付が変わったら 0 から
-      if (cur >= body.limit) return Response.json({ ok: false, count: cur });
-      await this.storage.put({ day: body.day, count: cur + 1 });
-      return Response.json({ ok: true, count: cur + 1 });
+    if (request.method === 'POST' && url.pathname === '/ice') {
+      // 本文はストレージを読む前に読み切る。読んでから書くまでのあいだにストレージ以外の
+      // await を挟むと、同時に来た要求が同じ値を読んで、片方の書き込みが消える
+      const { limit } = await request.json();
+      return Response.json(await this.ice(Number(limit) || 0));
     }
-    return Response.json({ day: day ?? null, count });
+    const stored = await this.storage.get(['day', 'count', 'ice']);
+    return Response.json({ day: stored.get('day') ?? null, count: stored.get('count') ?? 0, cachedAt: stored.get('ice')?.at ?? null });
+  }
+  async ice(limit) {
+    this.source ||= await iceSource(this.env);
+    const now = Date.now();
+    const cached = await this.storage.get('ice');
+    if (cached && cached.source === this.source && now - cached.at < ICE_TTL_SEC * 1000) return { ok: true, iceServers: cached.iceServers };
+    if (this.failure && now - this.failure.at < FAIL_TTL_SEC * 1000) return { ok: false, error: 'upstream', message: this.failure.message };
+    // ここから pending を立てるまで await を挟まない (挟むと同時に来た要求が上流を二重に呼ぶ)
+    this.pending ??= this.refresh(limit).finally(() => { this.pending = null; });
+    return this.pending;
+  }
+  async refresh(limit) {
+    const day = jstDay();
+    const stored = await this.storage.get(['day', 'count']);
+    const count = stored.get('day') === day ? (stored.get('count') ?? 0) : 0;   // 日付が変わったら 0 から
+    if (limit > 0 && count >= limit) return { ok: false, error: 'daily_cap', count };
+    const r = await fetchIceServers(this.env);
+    if (!r.ok) {
+      this.failure = { at: Date.now(), message: r.message };
+      return r;
+    }
+    this.failure = null;
+    await this.storage.put({ day, count: count + 1, ice: { at: Date.now(), source: this.source, iceServers: r.iceServers } });
+    return r;
   }
 }
 
-/** 今日の発行数を 1 つ確保する。上限に達していれば false。上限が無効なら常に true */
-async function takeDaily(env) {
-  const cap = Number(env.DAILY_CAP) || 0;
-  if (cap <= 0 || !env.DAILY_COUNTER) return { ok: true, count: 0, cap };
-  const stub = env.DAILY_COUNTER.get(env.DAILY_COUNTER.idFromName('turn'));
-  const res = await stub.fetch('https://counter/take', { method: 'POST', body: JSON.stringify({ day: jstDay(), limit: cap }) });
-  const r = await res.json();
-  return { ...r, cap };
+const counter = env => env.DAILY_COUNTER.get(env.DAILY_COUNTER.idFromName('turn'));
+
+/** ICE サーバーの一覧を得る。DailyCounter があれば保存分か上流から (上限つき)、無ければ毎回上流から */
+async function getIceServers(env) {
+  if (!env.DAILY_COUNTER) return fetchIceServers(env);
+  const res = await counter(env).fetch('https://counter/ice', { method: 'POST', body: JSON.stringify({ limit: Number(env.DAILY_CAP) || 0 }) });
+  return res.json();
 }
 
 async function dailyStatus(env) {
   const cap = Number(env.DAILY_CAP) || 0;
-  if (!env.DAILY_COUNTER) return { day: jstDay(), count: 0, cap };
-  const stub = env.DAILY_COUNTER.get(env.DAILY_COUNTER.idFromName('turn'));
-  const r = await (await stub.fetch('https://counter/status')).json();
+  if (!env.DAILY_COUNTER) return { day: jstDay(), count: 0, cap, cachedAt: null };
+  const r = await (await counter(env).fetch('https://counter/status')).json();
   // 日付が変わっていれば、まだ数え直していないだけなので 0 として見せる
-  return { day: jstDay(), count: r.day === jstDay() ? r.count : 0, cap };
+  return { day: jstDay(), count: r.day === jstDay() ? r.count : 0, cap, cachedAt: r.cachedAt ? new Date(r.cachedAt).toISOString() : null };
 }
 
 // ---- ランキング (ゴールタイム) ----
@@ -434,38 +509,26 @@ export default {
       if (!success) return fail(429, 'too many requests');
     }
 
-    // 短時間のキャッシュ。呼び出しが集中しても上流は CACHE_SEC に 1 回しか叩かない
+    // 短時間のキャッシュ (独自ドメインのときだけ効く)。外れたら DailyCounter の保存分か上流から
     const cache = caches.default;
     const cacheKey = new Request(new URL('/ice-servers', request.url).toString());
     let cached = await cache.match(cacheKey);
     if (!cached) {
-      // 上流に発行してもらう回数の上限 (キャッシュから返すぶんは数えない)
-      const daily = await takeDaily(env);
-      if (!daily.ok) {
+      let r;
+      try {
+        r = await getIceServers(env);
+      } catch (e) {
+        // Durable Object の一時的な失敗 (デプロイ直後のリセットなど)。CORS を付けて理由を返す
+        return fail(502, `counter unavailable: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (r.error === 'daily_cap') {
         // サイト側 (src/net.ts の loadTurn) は error: 'daily_cap' を見て
         // 「今日は対戦はできません。午前 0 時にリセットします」と出す
-        const body = { error: 'daily_cap', count: daily.count, cap: daily.cap, day: jstDay(), resetAt: nextJstMidnight() };
+        const body = { error: 'daily_cap', count: r.count, cap: Number(env.DAILY_CAP) || 0, day: jstDay(), resetAt: nextJstMidnight() };
         return withCors(Response.json(body, { status: 503, headers: { 'cache-control': 'no-store' } }), origin);
       }
-      const init = { method: env.TURN_API_METHOD || 'GET', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10000) };
-      if (env.TURN_API_TOKEN) init.headers.authorization = `Bearer ${env.TURN_API_TOKEN}`;
-      if (env.TURN_API_BODY) { init.body = env.TURN_API_BODY; init.headers['content-type'] = 'application/json'; }
-      let upstream;
-      try {
-        upstream = await fetch(env.TURN_API_URL, init);
-      } catch (e) {
-        return fail(502, `upstream unreachable: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      if (!upstream.ok) return fail(502, `upstream HTTP ${upstream.status}`);
-      let servers;
-      try {
-        servers = normalize(await upstream.json());
-      } catch {
-        return fail(502, 'upstream returned non-JSON');
-      }
-      // STUN だけの応答は配らない (サイト側は TURN があるかで対戦PLAY の可否を決める)
-      if (!hasTurnServer(servers)) return fail(502, 'upstream returned no turn: server');
-      cached = new Response(JSON.stringify({ iceServers: servers }), {
+      if (!r.ok) return fail(502, r.message);
+      cached = new Response(JSON.stringify({ iceServers: r.iceServers }), {
         status: 200,
         headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${CACHE_SEC}` },
       });

@@ -5,6 +5,8 @@
 //   node tools/check_site.mjs https://matsue.citykart.jp/ --commit 61276fc --wait 600
 //        # そのコミットの版が配信されるまで最大 600 秒待つ (デプロイ直後の確認)
 //   node tools/check_site.mjs https://matsue.citykart.jp/ --relays    # 対戦のリレーも見る
+//   --allow-daily-cap   TURN の資格情報 API が 1 日の発行上限に達しているのは警告にとどめる
+//                       (デプロイの点検用。上限に達した日にも修正を配信できるように。定期監視では付けない)
 //
 // 見ること:
 //   - index.html と英語版があり、そこから読む JS が取れる (古い HTML が消えた JS を指すと白画面になる)
@@ -25,6 +27,7 @@ const opt = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] 
 const expectCommit = opt('--commit');
 const waitSec = Number(opt('--wait') ?? 0);
 const checkRelays = args.includes('--relays');
+const allowDailyCap = args.includes('--allow-daily-cap');
 const remote = /^https?:\/\//.test(target);
 const base = remote ? target.replace(/\/?$/, '/') : path.resolve(target);
 
@@ -60,14 +63,16 @@ async function exists(rel) {
   try { return (await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(30000) })).ok; } catch { return false; }
 }
 
+async function readJson(rel, fail) {
+  const r = await get(rel);
+  if (!r.ok) { fail(`${rel}: HTTP ${r.status}${r.error ? ` (${r.error})` : ''}`); return null; }
+  try { return JSON.parse(r.body.toString('utf8')); } catch { fail(`${rel}: JSON として読めない`); return null; }
+}
+
 async function checkOnce() {
   const errors = [];
   const fail = m => errors.push(m);
-  const json = async rel => {
-    const r = await get(rel);
-    if (!r.ok) { fail(`${rel}: HTTP ${r.status}${r.error ? ` (${r.error})` : ''}`); return null; }
-    try { return JSON.parse(r.body.toString('utf8')); } catch { fail(`${rel}: JSON として読めない`); return null; }
-  };
+  const json = rel => readJson(rel, fail);
   const binSize = async (rel, expect) => {
     const r = await get(rel);
     if (!r.ok) return fail(`${rel}: HTTP ${r.status}`);
@@ -111,35 +116,45 @@ async function checkOnce() {
   if (bldg && !(bldg.count > 0)) fail('data/buildings.json: 建物が 0 棟');
   const roads = await json('data/roads.json');
   if (roads && !(Array.isArray(roads.items) && roads.items.length)) fail('data/roads.json: 道路が空');
+  return errors;
+}
 
-  // 本番では TURN を必須とする。設定 API が壊れたり STUN だけを返したりしても
-  // HTTP/リレー監視だけでは気づけないため、定期監視でも実際の応答を検査する。
-  if (remote || await exists('turn.json')) {
-    const turn = await json('turn.json');
-    // 配信される turn.json に固定の資格情報が入っていれば、誰でも TURN を使えてしまう
-    if (turn && hasStaticCredential(turn)) fail('turn.json に TURN の資格情報 (username / credential) がそのまま入っている');
-    let resolved = turn;
-    if (turn?.url) {
-      try {
-        // 鍵付きの URL (?apiKey=...) は配信されると鍵が公開されるので、ここでも止める
-        const endpoint = validateConfigUrl(turn.url);
-        // 資格情報 API (workers/turn/) はサイトの Origin からだけ許可するので、監視も同じ Origin を名乗る
-        const origin = remote ? new URL(base).origin : originFromCname((await get('CNAME')).body.toString('utf8'));
-        const res = await fetch(endpoint, { signal: AbortSignal.timeout(10000), headers: apiHeaders(origin) });
-        if (!res.ok) {
-          // Worker は 1 日の発行上限に達すると 503 と { "error": "daily_cap" } を返す (利用者には「今日は対戦できない」と出ている)
-          const body = (await res.text().catch(() => '')).slice(0, 200);
-          fail(body.includes('daily_cap') ? `TURN 設定 API: 1 日の発行上限に達している (${body})` : `TURN 設定 API: HTTP ${res.status}`);
-        } else {
-          resolved = await res.json();
-        }
-      } catch (e) {
-        fail(`TURN 設定 API: ${e instanceof Error ? e.message : String(e)}`);
+/**
+ * 本番では TURN を必須とする。設定 API が壊れたり STUN だけを返したりしても
+ * HTTP/リレー監視だけでは気づけないため、定期監視でも実際の応答を検査する。
+ * 資格情報 API を呼ぶので、--wait の繰り返しには入れず最後に 1 回だけ見る。
+ */
+async function turnCheck() {
+  const errors = [];
+  const fail = m => errors.push(m);
+  if (!remote && !(await exists('turn.json'))) return errors;
+  const turn = await readJson('turn.json', fail);
+  // 配信される turn.json に固定の資格情報が入っていれば、誰でも TURN を使えてしまう
+  if (turn && hasStaticCredential(turn)) fail('turn.json に TURN の資格情報 (username / credential) がそのまま入っている');
+  let resolved = turn;
+  if (turn?.url) {
+    try {
+      // 鍵付きの URL (?apiKey=...) は配信されると鍵が公開されるので、ここでも止める
+      const endpoint = validateConfigUrl(turn.url);
+      // 資格情報 API (workers/turn/) はサイトの Origin からだけ許可するので、監視も同じ Origin を名乗る
+      const origin = remote ? new URL(base).origin : originFromCname((await get('CNAME')).body.toString('utf8'));
+      const res = await fetch(endpoint, { signal: AbortSignal.timeout(10000), headers: apiHeaders(origin) });
+      if (!res.ok) {
+        // Worker は 1 日の発行上限に達すると 503 と { "error": "daily_cap" } を返す (利用者には「今日は対戦できない」と出ている)
+        const body = (await res.text().catch(() => '')).slice(0, 200);
+        if (!body.includes('daily_cap')) fail(`TURN 設定 API: HTTP ${res.status}`);
+        else if (allowDailyCap) console.warn(`警告: TURN 設定 API が 1 日の発行上限に達している (${body})`);
+        else fail(`TURN 設定 API: 1 日の発行上限に達している (${body})`);
         resolved = null;
+      } else {
+        resolved = await res.json();
       }
+    } catch (e) {
+      fail(`TURN 設定 API: ${e instanceof Error ? e.message : String(e)}`);
+      resolved = null;
     }
-    if (resolved && !hasTurnServer(resolved)) fail('TURN 設定に turn:/turns: server が無い');
   }
+  if (resolved && !hasTurnServer(resolved)) fail('TURN 設定に turn:/turns: server が無い');
   return errors;
 }
 
@@ -169,6 +184,7 @@ while (errors.length && Date.now() < deadline) {
   await new Promise(r => setTimeout(r, 30000));
   errors = await checkOnce();
 }
+errors.push(...await turnCheck());
 if (checkRelays) errors.push(...await relayCheck());
 
 if (errors.length) {

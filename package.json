@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "turn:prepare": "node tools/prepare_turn_config.mjs",
-    "check:dist": "node tools/check_site.mjs dist",
+    "check:dist": "node tools/check_site.mjs dist --allow-daily-cap",
     "data:download": "node tools/download_plateau.mjs",
     "data:convert": "node tools/convert_citygml.mjs",
     "data:castle": "node tools/convert_castle.mjs",
