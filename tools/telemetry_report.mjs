@@ -9,13 +9,16 @@
 // 読み込み完了までの時間 (load ready)・対戦の記録 (net)・WebGL が使えない環境 (gl unavailable) は
 // 通知せず、末尾に件数だけ添える。
 // 通知する前に Worker の上限を超えて消えた記録があれば、その件数も Issue に書く (droppedCount)。
-// --out のとき、GITHUB_OUTPUT があれば count (通知するエラーと消えた記録の件数) と last (最後の記録の番号) を書く。
+// --out のとき、GITHUB_OUTPUT があれば count (通知するエラー・管理用の口の操作・消えた記録の件数) と last (最後の記録の番号) を書く。
 // 定期監視 (.github/workflows/monitor.yml) は count が 0 でなければ Issue に足し、そのあと last で --ack する。
 // 記録の中身は workers/turn/worker.js の cleanTelemetry が整えたもの (種類・内容・ビルド・画質・言語・パス・UA)。
 // 記録は誰でも送れるので、利用者から来た値は Issue にコードとして載せる (code / codeBlock。リンクや @メンションにしない)。
+// 文の中の URL のクエリとメールアドレスは伏せる (Worker も保存の前に伏せるが、それより前に保存された記録もあるので)。
+// 管理用の口でランキングを変えた記録 (kind 'admin'。Worker の auditAdmin が書く) も通知する。
 
 import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { redactText } from '../workers/turn/redact.js';
 
 /** Issue に出す種類の上限 */
 const MAX_GROUPS = 20;
@@ -61,7 +64,7 @@ function tally(list) {
  * ` は枠を閉じられるので ' に替え、改行は空白にする
  */
 export function code(v, n = 160) {
-  const s = String(v ?? '').replace(/\s+/g, ' ').replace(/`/g, "'").trim().slice(0, n);
+  const s = redactText(v ?? '').replace(/\s+/g, ' ').replace(/`/g, "'").trim().slice(0, n);
   return `\`${s || '?'}\``;
 }
 
@@ -90,13 +93,16 @@ export function droppedCount(r) {
 
 /**
  * 記録を「種類/event: message」ごとにまとめて Markdown にする。dropped は通知する前に消えた件数。
- * 返り値: { count: 通知するエラーと消えた記録の件数, markdown: 本文 (どちらも無ければ '') }
+ * 管理用の口の操作 (kind 'admin') は別の節で 1 件ずつ出す。
+ * 返り値: { count: 通知するエラー・管理用の口の操作・消えた記録の件数, markdown: 本文 (どれも無ければ '') }
  */
 export function summarize(records, dropped = 0) {
+  const admin = records.filter(r => r.kind === 'admin');
   const errors = records.filter(isErrorRecord);
-  const others = records.filter(r => !isErrorRecord(r));
-  if (!errors.length && !dropped) return { count: 0, markdown: '' };
+  const others = records.filter(r => !isErrorRecord(r) && r.kind !== 'admin');
+  if (!errors.length && !dropped && !admin.length) return { count: 0, markdown: '' };
   const lines = [];
+  if (admin.length) lines.push(...adminSection(admin));
   if (dropped) {
     lines.push(`通知する前に記録の上限 (サイトごとに 1,000 件) を超え、古い記録 ${dropped} 件が消えました。消えた分にエラーがあったかは分かりません。`, '');
   }
@@ -110,7 +116,20 @@ export function summarize(records, dropped = 0) {
   if (noGl) parts.push(`WebGL が使えない環境 ${noGl} 件`);
   if (parts.length) lines.push(`同じ期間のほかの記録: ${parts.join('、')}`);
 
-  return { count: errors.length + dropped, markdown: lines.join('\n').trimEnd() + '\n' };
+  return { count: errors.length + dropped + admin.length, markdown: lines.join('\n').trimEnd() + '\n' };
+}
+
+/**
+ * 管理用の口でランキングを変えた記録 (Worker の auditAdmin)。ページからは送れない種類なので本物だが、
+ * 身に覚えが無ければ合言葉が漏れている。IP は公開の Issue には出さない
+ */
+function adminSection(records) {
+  return [
+    `管理用の口でランキングが ${records.length} 回変えられました。身に覚えが無ければ ADMIN_TOKEN を作り直してください。`,
+    '',
+    ...records.map(r => `- ${Number.isFinite(r.t) ? `${jst(r.t)} JST` : '時刻不明'} ${code(r.event, 30)} ${code(JSON.stringify(r.data ?? {}), 200)}`),
+    '',
+  ];
 }
 
 /** エラーを同じ内容ごとにまとめた節 (多い順) */
@@ -142,7 +161,7 @@ function errorSection(errors) {
     const where = tally(items.map(r => r.data?.where).filter(Boolean));
     if (where.length) lines.push(`- 場所: ${show(where, 2)}`);
     const stack = items.map(r => r.data?.stack).find(s => typeof s === 'string' && s);
-    if (stack) lines.push(...codeBlock(stack.split('\n').slice(0, 8).join('\n')));
+    if (stack) lines.push(...codeBlock(redactText(stack.split('\n').slice(0, 8).join('\n'))));
     lines.push('');
   });
   if (sorted.length > MAX_GROUPS) lines.push(`(ほか ${sorted.length - MAX_GROUPS} 種類)`, '');

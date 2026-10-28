@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 // Worker と tools/ は JavaScript (型定義なし)。vitest は型を検査しないのでそのまま読める
 import { TelemetryLog, cleanTelemetry, telemetryKey } from '../workers/turn/worker.js';
 import { browserOf, droppedCount, isErrorRecord, summarize } from '../tools/telemetry_report.mjs';
+import { redactText } from '../workers/turn/redact.js';
 
 /**
  * Durable Object の storage の代わり (get / put / delete / list の使う範囲だけ)。
@@ -44,7 +45,25 @@ describe('本番の記録 (Worker 側)', () => {
     expect(rec!.data).not.toHaveProperty('nested');
     expect(rec).not.toHaveProperty('extra');
   });
+  it('文の中の URL のクエリ・URL の利用者名とパスワード・メールアドレスを伏せる', () => {
+    expect(redactText('Failed to fetch https://api.example/x?token=abc#frag now')).toBe('Failed to fetch https://api.example/x?… now');
+    expect(redactText('    at f (https://matsue.citykart.jp/assets/a.js?v=1:2:3)')).toBe('    at f (https://matsue.citykart.jp/assets/a.js?…)');
+    expect(redactText('wss://relay.example/?key=k')).toBe('wss://relay.example/?…');
+    expect(redactText('https://user:pass@host.example/p')).toBe('https://…@host.example/p');
+    expect(redactText('連絡先 taro.yamada+kart@example.co.jp まで')).toBe('連絡先 <email> まで');
+    // そのままにするもの: Firefox・Safari のスタック (関数名@URL)、クエリの無い URL、ふつうの文
+    expect(redactText('init@https://matsue.citykart.jp/assets/a.js:1:2')).toBe('init@https://matsue.citykart.jp/assets/a.js:1:2');
+    expect(redactText('https://matsue.citykart.jp/data/lod2.bin')).toBe('https://matsue.citykart.jp/data/lod2.bin');
+    expect(redactText("Cannot read properties of undefined (reading 'x')")).toBe("Cannot read properties of undefined (reading 'x')");
+  });
+  it('Worker も保存の前に伏せる (改造したページは伏せずに送れるので)', () => {
+    const rec = cleanTelemetry({ kind: 'error', event: 'uncaught', data: { message: 'GET https://a.example/?apiKey=k1 failed', stack: 'x@https://a.example/b.js?t=2:1:1', mail: 'a@b.example' }, path: '/?room=X' });
+    expect(rec!.data).toEqual({ message: 'GET https://a.example/?… failed', stack: 'x@https://a.example/b.js?…', mail: '<email>' });
+    expect(JSON.stringify(rec)).not.toContain('k1');
+  });
   it('知らない種類や event の無いものは受け付けない', () => {
+    // 管理用の口の操作 (admin) は Worker が書くもので、ページからは送らせない
+    expect(cleanTelemetry({ kind: 'admin', event: 'delete', data: {} })).toBeNull();
     expect(cleanTelemetry({ kind: 'other', event: 'x' })).toBeNull();
     expect(cleanTelemetry({ kind: 'error' })).toBeNull();
     expect(cleanTelemetry('text')).toBeNull();
@@ -155,6 +174,25 @@ describe('本番の記録のまとめ (tools/telemetry_report.mjs)', () => {
     // コードの外には、リンク・@・HTML・見出しが出ていない
     const outside = markdown.replace(/`````[\s\S]*?`````/g, '').replace(/`[^`\n]*`/g, '');
     expect(outside).not.toMatch(/@|https?:|<img|^## /m);
+  });
+  it('Worker が伏せる前に保存された記録も、Issue に載せるときに伏せる', () => {
+    const { markdown } = summarize([uncaught('fetch https://a.example/x?token=t1 failed', {
+      data: { message: 'fetch https://a.example/x?token=t1 failed', stack: 'at f (https://a.example/b.js?t=t2:1:1)', where: 'https://a.example/b.js?t=t3:1:1' },
+    })]);
+    expect(markdown).toContain('`error/uncaught: fetch https://a.example/x?… failed`');
+    expect(markdown).not.toMatch(/t1|t2|t3/);
+  });
+  it('管理用の口でランキングを変えた記録は、エラーが無くても 1 件ずつ通知する (IP は出さない)', () => {
+    const { count, markdown } = summarize([
+      { kind: 'admin', event: 'delete', data: { id: 'abc' }, t: 1_700_000_000_000 },
+      { kind: 'admin', event: 'restore', data: { at: '2026-10-28T03:00:00.000Z' }, t: 1_700_000_060_000 },
+      { kind: 'load', event: 'ready', data: { ms: 1000 } },
+    ]);
+    expect(count).toBe(2);
+    expect(markdown).toContain('管理用の口でランキングが 2 回変えられました');
+    expect(markdown).toContain('- 2023/11/15 07:13 JST `delete` `{"id":"abc"}`');
+    expect(markdown).toContain('`restore` `{"at":"2026-10-28T03:00:00.000Z"}`');
+    expect(markdown).not.toContain('種類のエラー');
   });
   it('エラーが無ければ何も書かない', () => {
     expect(summarize([{ kind: 'load', event: 'ready', data: { ms: 1 } }])).toEqual({ count: 0, markdown: '' });

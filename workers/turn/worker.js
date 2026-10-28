@@ -83,6 +83,32 @@ function withCors(res, origin) {
 
 const text = (status, body) => new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } });
 
+/**
+ * 本文を max バイトまで読む。超えたら null。Content-Length で先に断り、無いとき (chunked) も
+ * 読みながら数えて打ち切る (大きな本文を読み切ってから断ると、そのあいだメモリと時間を使う)
+ */
+export async function readBody(request, max) {
+  if (Number(request.headers.get('content-length')) > max) return null;
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) { all.set(c, at); at += c.byteLength; }
+  return new TextDecoder().decode(all);
+}
+
 /** 日本時間の日付 (YYYY-MM-DD)。上限はこの単位で数え、0 時に戻る */
 export function jstDay(now = Date.now()) {
   return new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 10);
@@ -254,6 +280,8 @@ const RANK_SHOW = 20;
  */
 const MIN_TIME = { matsue: 180, hiroshima: 140, fukuyama: 200, kure: 120 };
 const MAX_TIME = 3600;
+/** 登録の本文の上限 (バイト)。名前・タイム・run だけなので 200 バイトほど */
+const RANK_MAX_BODY = 1000;
 
 /** Origin (https://matsue.citykart.jp) からサイト名 (matsue) を取る */
 export function siteOf(origin) {
@@ -358,9 +386,11 @@ async function handleRanking(request, env, origin, fail) {
     const { success } = await env.RATE_LIMITER.limit({ key: `rank:${ip}` });
     if (!success) return fail(429, 'too many requests');
   }
+  const raw = await readBody(request, RANK_MAX_BODY);
+  if (raw === null) return fail(413, 'too large');
   let body;
   try {
-    body = JSON.parse((await request.text()).slice(0, 1000));
+    body = JSON.parse(raw);
   } catch {
     return fail(400, 'bad json');
   }
@@ -388,7 +418,9 @@ async function handleRanking(request, env, origin, fail) {
 // GET と ack は Origin は要らないが Authorization: Bearer <TELEMETRY_TOKEN> が要る
 // (npx wrangler secret put TELEMETRY_TOKEN。GitHub の secret TELEMETRY_TOKEN と同じ値)。
 // 守れること / 守れないこと: 送り主はブラウザなので中身は偽れる。ここでできるのは Origin の確認、
-// 回数制限、大きさと項目の制限まで。名前や peer ID はページ側が送らない。
+// 回数制限、大きさと項目の制限まで。名前や peer ID はページ側が送らない。文の中の URL のクエリや
+// メールアドレスはページでも伏せるが、改造したページは伏せずに送れるので、ここでも伏せる (redact.js)。
+import { redactText } from './redact.js';
 
 /**
  * サイトごとに残す件数 (古いものから消す)。未通知のものも消える。番号は 1 ずつ増えるので、
@@ -396,8 +428,8 @@ async function handleRanking(request, env, origin, fail) {
  */
 const TELEMETRY_KEEP = 1000;
 const TELEMETRY_KINDS = ['error', 'load', 'net', 'gl'];
-/** 1 件の本文の上限 (文字)。これより長ければ受け付けない */
-const TELEMETRY_MAX_BODY = 8000;
+/** 1 件の本文の上限 (バイト)。ページが送るのは多くても 8 KB ほど (スタック 1,500 文字が日本語でも) */
+const TELEMETRY_MAX_BODY = 16000;
 
 /** 記録の番号をキーにする (0 詰めして辞書順 = 番号順にする) */
 export function telemetryKey(seq) {
@@ -406,18 +438,19 @@ export function telemetryKey(seq) {
 
 /**
  * ページから来た記録を検査して、残す項目だけに整える。種類が違う・event が無いものは null。
- * data の中は文字列 (1500 文字まで)・数・真偽だけ残す。
+ * data の中は文字列 (1500 文字まで)・数・真偽だけ残す。文の中の URL のクエリとメールアドレスは伏せる。
+ * kind 'admin' (管理用の口の操作。auditAdmin) は Worker が自分で書くもので、ページからは受け付けない。
  */
 export function cleanTelemetry(value) {
   if (!value || typeof value !== 'object') return null;
   if (!TELEMETRY_KINDS.includes(value.kind)) return null;
-  const event = typeof value.event === 'string' ? value.event.slice(0, 60) : '';
+  const event = typeof value.event === 'string' ? redactText(value.event).slice(0, 60) : '';
   if (!event) return null;
   const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : undefined);
   const data = {};
   if (value.data && typeof value.data === 'object') {
     for (const [k, v] of Object.entries(value.data).slice(0, 12)) {
-      if (typeof v === 'string') data[k.slice(0, 30)] = v.slice(0, 1500);
+      if (typeof v === 'string') data[k.slice(0, 30)] = redactText(v).slice(0, 1500);
       else if (typeof v === 'number' || typeof v === 'boolean') data[k.slice(0, 30)] = v;
     }
   }
@@ -427,7 +460,7 @@ export function cleanTelemetry(value) {
     data,
     at: Number.isFinite(value.at) ? Math.round(value.at) : 0,
     build: str(value.build, 20),
-    path: str(value.path, 200),
+    path: typeof value.path === 'string' ? redactText(value.path).slice(0, 200) : undefined,
     ua: str(value.ua, 300),
     quality: str(value.quality, 20),
     lang: str(value.lang, 10),
@@ -491,8 +524,8 @@ async function handleTelemetryPost(request, env, origin, fail) {
     const { success } = await env.RATE_LIMITER.limit({ key: `tel:${ip}` });
     if (!success) return fail(429, 'too many requests');
   }
-  const body = await request.text();
-  if (body.length > TELEMETRY_MAX_BODY) return fail(413, 'too large');
+  const body = await readBody(request, TELEMETRY_MAX_BODY);
+  if (body === null) return fail(413, 'too large');
   let value;
   try {
     value = JSON.parse(body);
@@ -557,6 +590,19 @@ async function handleTelemetryAdmin(request, env) {
   return new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
 
+/**
+ * 管理用の口でランキングを変えた (削除・復旧) ことを残す。そのサイトの記録 (TelemetryLog) に kind 'admin' として
+ * 足すと、定期監視がほかの記録と一緒に Issue で知らせるので、合言葉が漏れて誰かが使ったときに気づける。
+ * Issue は公開なので IP は記録に入れず、Workers のログにだけ書く (保存はしていないので、npx wrangler tail で
+ * 見ているあいだだけ見える)
+ */
+async function auditAdmin(request, env, site, action, detail) {
+  console.log(`admin ${action} site=${site} ${JSON.stringify(detail)} ip=${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`);
+  if (!env.TELEMETRY_LOG) return;
+  const rec = { kind: 'admin', event: action, data: detail, at: 0 };
+  await telemetryLog(env, site).fetch('https://log/add', { method: 'POST', body: JSON.stringify(rec) }).catch(() => {});
+}
+
 /** 管理用の削除。Origin は要らないが ADMIN_TOKEN が要る */
 async function handleRankingDelete(request, env) {
   const denied = await denyAdmin(request, env, env.ADMIN_TOKEN);
@@ -566,8 +612,9 @@ async function handleRankingDelete(request, env) {
   const site = url.searchParams.get('site') ?? '';
   const id = url.searchParams.get('id') ?? '';
   if (!/^[a-z]+$/.test(site) || !id) return text(400, 'site and id required');
-  const res = await board(env, site).fetch('https://board/delete', { method: 'POST', body: JSON.stringify({ id }) });
-  return new Response(res.body, { headers: { 'content-type': 'application/json' } });
+  const r = await (await board(env, site).fetch('https://board/delete', { method: 'POST', body: JSON.stringify({ id }) })).json();
+  if (r.ok) await auditAdmin(request, env, site, 'delete', { id });
+  return Response.json(r);
 }
 
 /** Durable Object の PITR で戻せる期間 */
@@ -613,6 +660,7 @@ async function handleRankingRestore(request, env) {
   } catch (e) {
     return text(502, `restore failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+  await auditAdmin(request, env, site, 'restore', bookmark ? { bookmark } : { at: new Date(at).toISOString() });
   // 戻るのは次に起動したとき。いまのインスタンスを終わらせる (終わらせた要求は失敗として返ってくる)
   await board(env, site).fetch('https://board/abort', { method: 'POST', body: '{}' }).catch(() => {});
   // 起動し直した後の一覧で、戻ったかを確かめられるようにする (abort した stub は使えないので取り直す)

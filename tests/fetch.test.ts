@@ -99,4 +99,20 @@ describe('テレメトリ', () => {
     expect(stripQuery('https://x.example/a/b.png?token=secret#frag')).toBe('https://x.example/a/b.png');
     expect(stripQuery('/assets/x.js?v=1')).toBe('/assets/x.js');
   });
+  it('送る前に、文の中の URL のクエリとメールアドレスを伏せる', async () => {
+    // 送り先は読み込み時に決まるので、設定してから読み込み直す
+    vi.resetModules();
+    vi.stubEnv('VITE_TELEMETRY_URL', 'https://t.example/telemetry');
+    vi.stubGlobal('location', new URL('https://matsue.citykart.jp/'));
+    const sent: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init: RequestInit) => { sent.push(String(init.body)); return new Response(null, { status: 204 }); }));
+    try {
+      const { report } = await import('../src/telemetry');
+      report('error', 'uncaught', { message: 'Failed to fetch https://api.example/x?token=secret (taro@example.com)', n: 1 });
+      expect(sent).toHaveLength(1);
+      expect(JSON.parse(sent[0]).data).toEqual({ message: 'Failed to fetch https://api.example/x?… (<email>)', n: 1 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

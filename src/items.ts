@@ -10,6 +10,20 @@ interface Coin { idx: number; lateral: number; mesh: THREE.Mesh; taken: number; 
 interface Banana { x: number; z: number; y: number; mesh: THREE.Group; owner: Kart; age: number; }
 interface Shell { x: number; z: number; y: number; vx: number; vz: number; mesh: THREE.Mesh; owner: Kart; life: number; bounces: number; trackIdx: number; }
 
+/**
+ * オンライン対戦で、1 台が同時に置いておけるオイル・ボールの数 (spawnFromNet)。普段はアイテムボックスを
+ * 取ってから使うので、オイルの寿命 (60 秒) のあいだでも数個、ボール (7 秒) は 2〜3 個にしかならない。
+ * 改造したページが使用のイベントを送り続けると (受信の回数制限は 1 人 30 回/秒)、オイルだけで
+ * 1,800 個を置けて端末が重くなるので、上限に達したら出さない
+ */
+export const NET_MAX_PLACED = { banana: 12, shell: 6 } as const;
+
+/** 受信したアイテムを出してよいか。そのカートが置いたオイル・ボール (placed) が上限に達していれば出さない */
+export function netSpawnAllowed(it: ItemType, owner: Kart, placed: readonly { owner: Kart }[]): boolean {
+  if (it !== 'banana' && it !== 'shell') return true;
+  return placed.filter(p => p.owner === owner).length < NET_MAX_PLACED[it];
+}
+
 export interface ItemEvents {
   onPickup(k: Kart): void;
   onCoin(k: Kart): void;
@@ -122,8 +136,9 @@ export class ItemSystem {
     }
   }
 
-  /** オンライン対戦: 他の人が使ったアイテムを、受信した位置で出す */
+  /** オンライン対戦: 他の人が使ったアイテムを、受信した位置で出す (置いてある数が上限なら出さない) */
   spawnFromNet(it: ItemType, owner: Kart, x: number, z: number, y: number, heading: number, speed: number) {
+    if (!netSpawnAllowed(it, owner, it === 'banana' ? this.bananas : this.shells)) return;
     this.spawn(it, owner, x, z, y, heading, speed, null);
   }
 

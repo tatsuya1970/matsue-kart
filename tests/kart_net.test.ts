@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Kart, NET_EXTRAPOLATE_SEC } from '../src/kart';
 import type { Track } from '../src/track';
 
@@ -36,5 +36,24 @@ describe('他人のカートの外挿 (Kart.netApply)', () => {
     k.netApply(1 / 60, track);
     expect(k.netX).toBeCloseTo(100 + 50 / 60, 5);
     expect(k.speed).toBe(50);
+  });
+});
+
+describe('受信したアイテムの数の上限 (netSpawnAllowed)', () => {
+  it('1 台が置いたオイル・ボールが上限に達したら出さない。ほかのカートの分は数えない', async () => {
+    // src/items.ts → src/i18n.ts は読み込み時に location を見る (言語の判定)
+    vi.stubGlobal('location', new URL('http://localhost/'));
+    const { NET_MAX_PLACED, netSpawnAllowed } = await import('../src/items');
+    const a = remoteKart(), b = remoteKart();
+    const oils = Array.from({ length: NET_MAX_PLACED.banana - 1 }, () => ({ owner: a }));
+    expect(netSpawnAllowed('banana', a, oils)).toBe(true);
+    oils.push({ owner: a });
+    expect(netSpawnAllowed('banana', a, oils)).toBe(false);
+    expect(netSpawnAllowed('banana', b, oils)).toBe(true);
+    const balls = Array.from({ length: NET_MAX_PLACED.shell }, () => ({ owner: a }));
+    expect(netSpawnAllowed('shell', a, balls)).toBe(false);
+    // 物を置かないアイテム (ダッシュ・むてき) は数えない
+    expect(netSpawnAllowed('mushroom', a, oils)).toBe(true);
+    expect(netSpawnAllowed('star', a, oils)).toBe(true);
   });
 });

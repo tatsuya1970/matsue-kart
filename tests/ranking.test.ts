@@ -8,7 +8,7 @@ let formatTime: typeof import('../src/ranking').formatTime;
 let formatDate: typeof import('../src/ranking').formatDate;
 beforeAll(async () => ({ cleanName, eligibleRun, formatTime, formatDate } = await import('../src/ranking')));
 // Worker の検査もここで行う (JavaScript。vitest は型を見ないのでそのまま読める)
-import worker, { Leaderboard, cleanName as workerCleanName, cleanRun, cleanTime, parseJstTime, sameSecret, siteOf } from '../workers/turn/worker.js';
+import worker, { Leaderboard, cleanName as workerCleanName, cleanRun, cleanTime, parseJstTime, readBody, sameSecret, siteOf } from '../workers/turn/worker.js';
 
 /**
  * Durable Object の storage の代わり (Leaderboard が使う範囲)。本物と同じく値は写しにする。
@@ -130,6 +130,7 @@ describe('ランキング (Worker 側)', () => {
   it('管理用の復旧: 合言葉が要り、その時刻の bookmark へ戻して、起動し直した後の一覧を返す', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-28T03:00:00Z'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const { board, storage, abort } = newBoard();
       await addTo(board, { name: 'A', time: 300 });
@@ -152,7 +153,13 @@ describe('ランキング (Worker 側)', () => {
       // 取り消し: undo の bookmark へ戻す
       expect((await call('site=matsue&bookmark=bm-undo')).status).toBe(200);
       expect(storage.restoreTo).toBe('bm-undo');
+      // 戻した操作は Workers のログに残す (記録への追加は TELEMETRY_LOG があるときだけ)
+      expect(log.mock.calls.map(c => String(c[0]))).toEqual([
+        'admin restore site=matsue {"at":"2026-10-28T02:00:00.000Z"} ip=unknown',
+        'admin restore site=matsue {"bookmark":"bm-undo"} ip=unknown',
+      ]);
     } finally {
+      log.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -163,19 +170,54 @@ describe('ランキング (Worker 側)', () => {
 
     const { board } = newBoard();
     const { id } = await addTo(board, { name: 'A', time: 300 });
-    let left = 3;
+    let left = 4;
     const limit = vi.fn(async () => ({ success: left-- > 0 }));
-    const env = { ADMIN_TOKEN: 'secret', RATE_LIMITER: { limit }, LEADERBOARD: { idFromName: (s: string) => s, get: () => ({ fetch: (u: string, init?: RequestInit) => board.fetch(new Request(u, init)) }) } };
+    // 操作の記録 (auditAdmin) は、そのサイトの記録 (TelemetryLog) に足す
+    const audits: unknown[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const env = {
+      ADMIN_TOKEN: 'secret', RATE_LIMITER: { limit },
+      LEADERBOARD: { idFromName: (s: string) => s, get: () => ({ fetch: (u: string, init?: RequestInit) => board.fetch(new Request(u, init)) }) },
+      TELEMETRY_LOG: { idFromName: (s: string) => s, get: (s: string) => ({ fetch: async (_u: string, init: RequestInit) => { audits.push([s, JSON.parse(String(init.body))]); return Response.json({ seq: 1 }); } }) },
+    };
     const del = (query: string, token = 'secret') =>
       worker.fetch(new Request(`https://w.example/ranking?${query}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}`, 'CF-Connecting-IP': '203.0.113.9' } }), env, {});
-    expect((await del(`site=matsue&id=${id}`, 'wrong')).status).toBe(403);
-    expect((await del(`site=../x&id=${id}`)).status).toBe(400);
-    expect(await (await del(`site=matsue&id=${id}`)).json()).toEqual({ ok: true });
-    expect(limit).toHaveBeenCalledWith({ key: 'admin:203.0.113.9' });
-    // 上限を超えたら、正しい合言葉でも 429 (当たったかどうかを返さない)
-    const second = await addTo(board, { name: 'B', time: 310 });
-    expect((await del(`site=matsue&id=${second.id}`)).status).toBe(429);
-    expect((await topOf(board)).entries.map((e: any) => e.name)).toEqual(['B']);
+    try {
+      expect((await del(`site=matsue&id=${id}`, 'wrong')).status).toBe(403);
+      expect((await del(`site=../x&id=${id}`)).status).toBe(400);
+      expect(await (await del('site=matsue&id=none')).json()).toEqual({ ok: false });   // 消えていなければ記録しない
+      expect(await (await del(`site=matsue&id=${id}`)).json()).toEqual({ ok: true });
+      expect(limit).toHaveBeenCalledWith({ key: 'admin:203.0.113.9' });
+      expect(audits).toEqual([['matsue', { kind: 'admin', event: 'delete', data: { id }, at: 0 }]]);
+      // IP は Workers のログにだけ残す (記録は公開の Issue に載るので入れない)
+      expect(log.mock.calls[0][0]).toContain('ip=203.0.113.9');
+      expect(JSON.stringify(audits)).not.toContain('203.0.113.9');
+      // 上限を超えたら、正しい合言葉でも 429 (当たったかどうかを返さない)
+      const second = await addTo(board, { name: 'B', time: 310 });
+      expect((await del(`site=matsue&id=${second.id}`)).status).toBe(429);
+      expect((await topOf(board)).entries.map((e: any) => e.name)).toEqual(['B']);
+    } finally {
+      log.mockRestore();
+    }
+  });
+  it('本文は上限のバイト数までしか読まない (Content-Length で先に断り、無ければ読みながら打ち切る)', async () => {
+    const post = (body: BodyInit, headers: Record<string, string> = {}) => new Request('https://w.example/', { method: 'POST', body, headers, duplex: 'half' } as RequestInit);
+    expect(await readBody(post('{"a":1}'), 100)).toBe('{"a":1}');
+    expect(await readBody(post('あ'.repeat(30)), 100)).toBe('あ'.repeat(30));   // 90 バイト
+    expect(await readBody(post('あ'.repeat(34)), 100)).toBeNull();               // 102 バイト
+    expect(await readBody(post('x', { 'content-length': '5000' }), 100)).toBeNull();
+    // Content-Length の無い本文 (chunked) も、上限を超えたところで打ち切る
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) { pulled++; c.enqueue(new Uint8Array(64)); if (pulled > 1000) c.close(); },
+    });
+    expect(await readBody(post(stream), 100)).toBeNull();
+    expect(pulled).toBeLessThan(10);
+
+    // ランキングの登録は 1,000 バイトを超えたら 413
+    const env = { ALLOWED_ORIGINS: 'https://matsue.citykart.jp', LEADERBOARD: {} };
+    const res = await worker.fetch(new Request('https://w.example/ranking', { method: 'POST', headers: { origin: 'https://matsue.citykart.jp' }, body: JSON.stringify({ name: 'A', time: 300, pad: 'x'.repeat(2000) }) }), env, {});
+    expect(res.status).toBe(413);
   });
 });
 

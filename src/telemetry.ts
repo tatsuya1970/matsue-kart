@@ -4,6 +4,10 @@
 // (GitHub Actions ではリポジトリ変数 TELEMETRY_URL)。未設定なら送らず、
 // ページ内に直近の記録を残すだけ (window.__telemetry() で見られる)。
 // 送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送らない。
+// 内容の文に URL のクエリやメールアドレスが入っていれば伏せて送る (Worker も同じ処理をする)。
+
+// 伏せ方は Worker と同じものを使う (workers/turn/redact.js)
+import { redactText } from '../workers/turn/redact.js';
 
 type Kind = 'error' | 'load' | 'net' | 'gl';
 
@@ -31,6 +35,8 @@ export function setTelemetryContext(extra: Record<string, unknown>): void {
 }
 
 export function report(kind: Kind, event: string, data: Record<string, unknown> = {}): void {
+  // 例外の文やスタックに、トークン付きの URL などが入っていることがある。送る前に伏せる
+  data = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? redactText(v) : v]));
   const rec: TelemetryRecord = { kind, event, data, at: Math.round(performance.now()) };
   records.push(rec);
   if (records.length > KEEP) records.shift();
