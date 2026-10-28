@@ -90,8 +90,10 @@ jobs:
       - name: Mark browser records as notified
         # Issue に足せなかったときは通知済みにしない (次の回にもう一度足す)
         if: always() && steps.telemetry.outcome == 'success' && steps.report_errors.outcome != 'failure'
-        run: node tools/telemetry_report.mjs --site "$SITE" --ack "${{ steps.telemetry.outputs.last }}"
+        run: node tools/telemetry_report.mjs --site "$SITE" --ack "$LAST"
         env:
+          # 前のステップの出力は env で渡す (run に直接埋め込むと、中身がシェルのコマンドとして読まれる)
+          LAST: ${{ steps.telemetry.outputs.last }}
           TELEMETRY_URL: ${{ vars.TELEMETRY_URL }}
           TELEMETRY_TOKEN: ${{ secrets.TELEMETRY_TOKEN }}
 

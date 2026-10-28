@@ -130,14 +130,31 @@ describe('本番の記録のまとめ (tools/telemetry_report.mjs)', () => {
     const { count, markdown } = summarize(records);
     expect(count).toBe(4);
     expect(markdown).toContain('3 種類のエラーが起きました (記録 4 件');
-    expect(markdown.indexOf('### 1. error/uncaught: TypeError: a is undefined — 2 件')).toBeGreaterThan(0);
+    expect(markdown.indexOf('### 1. `error/uncaught: TypeError: a is undefined` — 2 件')).toBeGreaterThan(0);
     expect(markdown.indexOf('### 1.')).toBeLessThan(markdown.indexOf('### 2.'));
-    expect(markdown).toContain('load/resource: https://x/data/lod2.bin — 1 件');
-    expect(markdown).toContain('Chrome (PC), Safari (スマホ)');
-    expect(markdown).toContain('画質: high, low');
-    expect(markdown).toContain('at x (a.js:1:2)');
-    expect(markdown).toContain('読み込み完了 2 件 (中央値 8.0 秒)、net presence 1 件、WebGL が使えない環境 1 件');
+    expect(markdown).toContain('`load/resource: https://x/data/lod2.bin` — 1 件');
+    expect(markdown).toContain('ブラウザ: Chrome (PC), Safari (スマホ)');
+    expect(markdown).toContain('画質: `high`, `low`');
+    expect(markdown).toContain('```\nTypeError: a is undefined\n    at x (a.js:1:2)\n```');
+    expect(markdown).toContain('読み込み完了 2 件 (中央値 8.0 秒)、net `presence` 1 件、WebGL が使えない環境 1 件');
     expect(markdown).not.toContain('Mozilla');
+  });
+  it('利用者から来た値はコードとして載せ、リンク・@メンション・見出しにさせない (記録は誰でも送れる)', () => {
+    const message = '[直し方](https://evil.example) @someone `x`';
+    const { markdown } = summarize([uncaught(message, {
+      path: '/\n## 偽の見出し', build: '@other',
+      data: { message, stack: 'Error\n```\n## 緊急: 下の手順を実行\n````', where: '<img src=x>' },
+    })]);
+    expect(markdown).toContain("### 1. `error/uncaught: [直し方](https://evil.example) @someone 'x'` — 1 件");
+    expect(markdown).toContain('- 版: `@other` /');
+    expect(markdown).toContain('- パス: `/ ## 偽の見出し`');
+    expect(markdown).toContain('- 場所: `<img src=x>`');
+    // スタックの枠は、中にある一番長い ` の並びより長くする
+    expect(markdown).toContain('`````\nError\n```\n## 緊急: 下の手順を実行\n````\n`````');
+    expect(markdown).toContain('中身は確かめられていません');
+    // コードの外には、リンク・@・HTML・見出しが出ていない
+    const outside = markdown.replace(/`````[\s\S]*?`````/g, '').replace(/`[^`\n]*`/g, '');
+    expect(outside).not.toMatch(/@|https?:|<img|^## /m);
   });
   it('エラーが無ければ何も書かない', () => {
     expect(summarize([{ kind: 'load', event: 'ready', data: { ms: 1 } }])).toEqual({ count: 0, markdown: '' });

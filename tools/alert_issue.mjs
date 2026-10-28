@@ -11,7 +11,7 @@
 // 通知の Issue には LABEL を付けて、ほかの Issue と区別する (無ければ作る)。
 
 import { readFile } from 'node:fs/promises';
-import { jst } from './telemetry_report.mjs';
+import { codeBlock, jst } from './telemetry_report.mjs';
 
 const LABEL = 'monitor';
 const LABEL_COLOR = 'd93f0b';
@@ -68,7 +68,8 @@ async function buildBody() {
   if (bodyFile) parts.push((await readFile(bodyFile, 'utf8')).trim());
   if (logFile) {
     const lines = (await readFile(logFile, 'utf8')).trimEnd().split('\n');
-    parts.push(['```', ...lines.slice(-LOG_TAIL), '```'].join('\n'));
+    // ログに ``` が混じっても枠を抜けないように (codeBlock)
+    parts.push(codeBlock(lines.slice(-LOG_TAIL).join('\n')).join('\n'));
   }
   if (run) parts.push(`実行: ${run}`);
   parts.push(`(${jst(Date.now())} JST)`);

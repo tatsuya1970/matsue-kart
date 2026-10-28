@@ -94,10 +94,31 @@ describe('TURN の資格情報の保存と 1 日の上限 (DailyCounter)', () =>
   });
 
   it('上流が届かない・STUN だけを返すのも失敗として扱う', async () => {
-    upstream.mockImplementation(async () => { throw new TypeError('network'); });
-    expect(await ice(newCounter())).toMatchObject({ ok: false, message: 'upstream unreachable: network' });
-    upstream.mockImplementation(async () => Response.json([{ urls: 'stun:stun.example:3478' }]));
-    expect(await ice(newCounter())).toMatchObject({ ok: false, message: 'upstream returned no turn: server' });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      upstream.mockImplementation(async () => { throw new TypeError('network'); });
+      expect(await ice(newCounter())).toMatchObject({ ok: false, message: 'upstream unreachable' });
+      upstream.mockImplementation(async () => Response.json([{ urls: 'stun:stun.example:3478' }]));
+      expect(await ice(newCounter())).toMatchObject({ ok: false, message: 'upstream returned no turn: server' });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('上流に届かないときの例外の文は返さず、ログにはクエリ (鍵) を伏せて残す', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // fetch は URL が壊れているとき、例外の文に URL を入れることがある
+      upstream.mockImplementation(async () => { throw new TypeError(`Fetch API cannot load: ${ENV.TURN_API_URL}`); });
+      const r = await ice(newCounter());
+      expect(r).toEqual({ ok: false, error: 'upstream', message: 'upstream unreachable' });
+      expect(JSON.stringify(r)).not.toContain('k1');
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain('Fetch API cannot load: https://example.metered.live/api/v1/turn/credentials?…');
+      expect(log.mock.calls[0][0]).not.toContain('k1');
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('上限に達しても保存分があれば配る。使える保存分が無ければ上流を呼ばずに daily_cap、翌日は 0 から', async () => {

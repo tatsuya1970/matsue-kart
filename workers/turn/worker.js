@@ -104,6 +104,11 @@ export async function iceSource(env) {
   return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** 文の中の URL のクエリ (?apiKey=... など) を伏せる。ログに鍵を残さないため */
+export function redactQuery(s) {
+  return String(s).replace(/\?\S*/g, '?…');
+}
+
 /** 上流 (metered.ca など) に ICE サーバーの一覧を聞く。→ { ok: true, iceServers } / { ok: false, error: 'upstream', message } */
 export async function fetchIceServers(env) {
   const failed = message => ({ ok: false, error: 'upstream', message });
@@ -115,7 +120,10 @@ export async function fetchIceServers(env) {
   try {
     upstream = await fetch(env.TURN_API_URL, init);
   } catch (e) {
-    return failed(`upstream unreachable: ${e instanceof Error ? e.message : String(e)}`);
+    // 例外の文は利用者に返さない。fetch は URL が壊れているとき、文に URL (鍵の付いた TURN_API_URL) を入れることがある。
+    // 詳しくは Workers のログ (持ち主だけが見られる) に、クエリを伏せて残す
+    console.error(`upstream unreachable: ${redactQuery(e instanceof Error ? e.message : String(e))}`);
+    return failed('upstream unreachable');
   }
   if (!upstream.ok) return failed(`upstream HTTP ${upstream.status}`);
   let servers;
@@ -497,10 +505,40 @@ async function handleTelemetryPost(request, env, origin, fail) {
   return withCors(new Response(null, { status: 204 }), origin);
 }
 
+// ---- 管理用の口 (記録の読み出し、ランキングの削除・復旧) ----
+
+/**
+ * 管理用の口の合言葉 (Authorization: Bearer <secret>) を確かめる。通せば null、通さなければ返す応答。
+ * 合言葉を見る前に、1 つの IP からの回数を RATE_LIMITER (wrangler.toml。1 分に 20 回) で数える
+ * (総当たりで当てられないように。外れたときだけ数えると、上限を超えても当たりの要求だけは通るので、
+ * 当たったかどうかが分かってしまう)
+ */
+async function denyAdmin(request, env, secret) {
+  if (env.RATE_LIMITER) {
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    const { success } = await env.RATE_LIMITER.limit({ key: `admin:${ip}` });
+    if (!success) return text(429, 'too many requests');
+  }
+  if (!secret || !(await sameSecret(request.headers.get('Authorization') ?? '', `Bearer ${secret}`))) return text(403, 'forbidden');
+  return null;
+}
+
+/**
+ * 2 つの文字列が同じか。かかる時間が中身によらないように、両方の SHA-256 を全バイト比べる
+ * (=== は最初に食い違ったところで止まるので、時間を測れば合言葉を先頭から推測できてしまう)
+ */
+export async function sameSecret(a, b) {
+  const enc = new TextEncoder();
+  const [x, y] = await Promise.all([a, b].map(async s => new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(s)))));
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
 /** 定期監視からの読み出しと通知済みの印 (GET /telemetry, POST /telemetry/ack)。Origin は要らないが TELEMETRY_TOKEN が要る */
 async function handleTelemetryAdmin(request, env) {
-  const auth = request.headers.get('Authorization') ?? '';
-  if (!env.TELEMETRY_TOKEN || auth !== `Bearer ${env.TELEMETRY_TOKEN}`) return text(403, 'forbidden');
+  const denied = await denyAdmin(request, env, env.TELEMETRY_TOKEN);
+  if (denied) return denied;
   if (!env.TELEMETRY_LOG) return text(503, 'telemetry is not configured');
   const url = new URL(request.url);
   const site = url.searchParams.get('site') ?? '';
@@ -521,13 +559,13 @@ async function handleTelemetryAdmin(request, env) {
 
 /** 管理用の削除。Origin は要らないが ADMIN_TOKEN が要る */
 async function handleRankingDelete(request, env) {
-  const auth = request.headers.get('Authorization') ?? '';
-  if (!env.ADMIN_TOKEN || auth !== `Bearer ${env.ADMIN_TOKEN}`) return text(403, 'forbidden');
+  const denied = await denyAdmin(request, env, env.ADMIN_TOKEN);
+  if (denied) return denied;
   if (!env.LEADERBOARD) return text(503, 'ranking is not configured');
   const url = new URL(request.url);
   const site = url.searchParams.get('site') ?? '';
   const id = url.searchParams.get('id') ?? '';
-  if (!site || !id) return text(400, 'site and id required');
+  if (!/^[a-z]+$/.test(site) || !id) return text(400, 'site and id required');
   const res = await board(env, site).fetch('https://board/delete', { method: 'POST', body: JSON.stringify({ id }) });
   return new Response(res.body, { headers: { 'content-type': 'application/json' } });
 }
@@ -555,8 +593,8 @@ export function parseJstTime(v) {
  * 戻した時刻より後の登録は消える。手元の wrangler dev では PITR が無いので試せない
  */
 async function handleRankingRestore(request, env) {
-  const auth = request.headers.get('Authorization') ?? '';
-  if (!env.ADMIN_TOKEN || auth !== `Bearer ${env.ADMIN_TOKEN}`) return text(403, 'forbidden');
+  const denied = await denyAdmin(request, env, env.ADMIN_TOKEN);
+  if (denied) return denied;
   if (!env.LEADERBOARD) return text(503, 'ranking is not configured');
   if (request.method !== 'POST') return text(405, 'method not allowed');
   const url = new URL(request.url);
@@ -632,7 +670,9 @@ export default {
         r = await getIceServers(env);
       } catch (e) {
         // Durable Object の一時的な失敗 (デプロイ直後のリセットなど)。CORS を付けて理由を返す
-        return fail(502, `counter unavailable: ${e instanceof Error ? e.message : String(e)}`);
+        // (中の例外の文は返さず、Workers のログにだけ残す)
+        console.error(`counter unavailable: ${redactQuery(e instanceof Error ? e.message : String(e))}`);
+        return fail(502, 'counter unavailable');
       }
       if (r.error === 'daily_cap') {
         // サイト側 (src/net.ts の loadTurn) は error: 'daily_cap' を見て

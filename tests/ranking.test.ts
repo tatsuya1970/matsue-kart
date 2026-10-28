@@ -8,7 +8,7 @@ let formatTime: typeof import('../src/ranking').formatTime;
 let formatDate: typeof import('../src/ranking').formatDate;
 beforeAll(async () => ({ cleanName, eligibleRun, formatTime, formatDate } = await import('../src/ranking')));
 // Worker の検査もここで行う (JavaScript。vitest は型を見ないのでそのまま読める)
-import worker, { Leaderboard, cleanName as workerCleanName, cleanRun, cleanTime, parseJstTime, siteOf } from '../workers/turn/worker.js';
+import worker, { Leaderboard, cleanName as workerCleanName, cleanRun, cleanTime, parseJstTime, sameSecret, siteOf } from '../workers/turn/worker.js';
 
 /**
  * Durable Object の storage の代わり (Leaderboard が使う範囲)。本物と同じく値は写しにする。
@@ -155,6 +155,27 @@ describe('ランキング (Worker 側)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it('管理用の口: 合言葉は全部を比べ、1 つの IP からの回数は合言葉を見る前に数える', async () => {
+    expect(await sameSecret('Bearer abc', 'Bearer abc')).toBe(true);
+    expect(await sameSecret('Bearer abd', 'Bearer abc')).toBe(false);
+    expect(await sameSecret('', 'Bearer abc')).toBe(false);
+
+    const { board } = newBoard();
+    const { id } = await addTo(board, { name: 'A', time: 300 });
+    let left = 3;
+    const limit = vi.fn(async () => ({ success: left-- > 0 }));
+    const env = { ADMIN_TOKEN: 'secret', RATE_LIMITER: { limit }, LEADERBOARD: { idFromName: (s: string) => s, get: () => ({ fetch: (u: string, init?: RequestInit) => board.fetch(new Request(u, init)) }) } };
+    const del = (query: string, token = 'secret') =>
+      worker.fetch(new Request(`https://w.example/ranking?${query}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}`, 'CF-Connecting-IP': '203.0.113.9' } }), env, {});
+    expect((await del(`site=matsue&id=${id}`, 'wrong')).status).toBe(403);
+    expect((await del(`site=../x&id=${id}`)).status).toBe(400);
+    expect(await (await del(`site=matsue&id=${id}`)).json()).toEqual({ ok: true });
+    expect(limit).toHaveBeenCalledWith({ key: 'admin:203.0.113.9' });
+    // 上限を超えたら、正しい合言葉でも 429 (当たったかどうかを返さない)
+    const second = await addTo(board, { name: 'B', time: 310 });
+    expect((await del(`site=matsue&id=${second.id}`)).status).toBe(429);
+    expect((await topOf(board)).entries.map((e: any) => e.name)).toEqual(['B']);
   });
 });
 

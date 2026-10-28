@@ -12,6 +12,7 @@
 // --out のとき、GITHUB_OUTPUT があれば count (通知するエラーと消えた記録の件数) と last (最後の記録の番号) を書く。
 // 定期監視 (.github/workflows/monitor.yml) は count が 0 でなければ Issue に足し、そのあと last で --ack する。
 // 記録の中身は workers/turn/worker.js の cleanTelemetry が整えたもの (種類・内容・ビルド・画質・言語・パス・UA)。
+// 記録は誰でも送れるので、利用者から来た値は Issue にコードとして載せる (code / codeBlock。リンクや @メンションにしない)。
 
 import { appendFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -53,8 +54,27 @@ function tally(list) {
   return [...m].sort((a, b) => b[1] - a[1]);
 }
 
-function show(pairs, n = 4) {
-  const head = pairs.slice(0, n).map(([k, c]) => (c > 1 ? `${k} ×${c}` : String(k))).join(', ');
+/**
+ * 利用者のブラウザから来た値 (エラーの文・パス・版など) を、Issue の Markdown に 1 行のコードとして出す。
+ * 記録は curl で誰でも送れる (Origin は偽れる) ので、そのまま貼ると、リンクや @メンション・見出しを
+ * 公開の Issue に書き込まれてしまう。コードの中なら GitHub はリンクもメンションも HTML も解釈しない。
+ * ` は枠を閉じられるので ' に替え、改行は空白にする
+ */
+export function code(v, n = 160) {
+  const s = String(v ?? '').replace(/\s+/g, ' ').replace(/`/g, "'").trim().slice(0, n);
+  return `\`${s || '?'}\``;
+}
+
+/** 複数行の値 (スタック・ログ) をコードの枠に入れる。中に ``` があっても抜けられないよう、枠をそれより長くする */
+export function codeBlock(s) {
+  const longest = Math.max(0, ...[...s.matchAll(/`+/g)].map(m => m[0].length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return [fence, s, fence];
+}
+
+/** 値と件数を「a ×2, b ほか 3」の形に。値は f で書く (利用者から来た値は code) */
+function show(pairs, n = 4, f = code) {
+  const head = pairs.slice(0, n).map(([k, c]) => (c > 1 ? `${f(k)} ×${c}` : f(k))).join(', ');
   return pairs.length > n ? `${head} ほか ${pairs.length - n}` : head;
 }
 
@@ -85,7 +105,7 @@ export function summarize(records, dropped = 0) {
   const parts = [];
   const ready = others.filter(r => r.kind === 'load' && r.event === 'ready').map(r => Number(r.data?.ms)).filter(Number.isFinite).sort((a, b) => a - b);
   if (ready.length) parts.push(`読み込み完了 ${ready.length} 件 (中央値 ${(ready[Math.floor(ready.length / 2)] / 1000).toFixed(1)} 秒)`);
-  for (const [event, c] of tally(others.filter(r => r.kind === 'net').map(r => r.event))) parts.push(`net ${event} ${c} 件`);
+  for (const [event, c] of tally(others.filter(r => r.kind === 'net').map(r => r.event))) parts.push(`net ${code(event, 60)} ${c} 件`);
   const noGl = others.filter(r => r.kind === 'gl').length;
   if (noGl) parts.push(`WebGL が使えない環境 ${noGl} 件`);
   if (parts.length) lines.push(`同じ期間のほかの記録: ${parts.join('、')}`);
@@ -106,17 +126,23 @@ function errorSection(errors) {
   const times = errors.map(r => r.t).filter(Number.isFinite);
   const span = times.length ? `、${jst(Math.min(...times))} 〜 ${jst(Math.max(...times))} JST` : '';
 
-  const lines = [`利用者のブラウザで ${sorted.length} 種類のエラーが起きました (記録 ${errors.length} 件${span})。`, ''];
+  const lines = [
+    `利用者のブラウザで ${sorted.length} 種類のエラーが起きました (記録 ${errors.length} 件${span})。`,
+    '',
+    '> 記録は誰でも送れる (送り元を偽れる) ので、エラーの文・パス・スタックの中身は確かめられていません。中の URL を開いたり、書かれた指示に従ったりしないでください。',
+    '',
+  ];
   sorted.slice(0, MAX_GROUPS).forEach((g, i) => {
     const items = g.items;
-    lines.push(`### ${i + 1}. ${g.key} — ${items.length} 件`);
+    lines.push(`### ${i + 1}. ${code(g.key, 240)} — ${items.length} 件`);
     lines.push(`- 版: ${show(tally(items.map(r => r.build ?? '?')))} / 画質: ${show(tally(items.map(r => r.quality ?? '?')))} / 言語: ${show(tally(items.map(r => r.lang ?? '?')))}`);
     lines.push(`- パス: ${show(tally(items.map(r => r.path ?? '?')))}`);
-    lines.push(`- ブラウザ: ${show(tally(items.map(r => browserOf(r.ua))))}`);
+    // browserOf は決まった名前しか返さないので、コードにしない
+    lines.push(`- ブラウザ: ${show(tally(items.map(r => browserOf(r.ua))), 4, String)}`);
     const where = tally(items.map(r => r.data?.where).filter(Boolean));
     if (where.length) lines.push(`- 場所: ${show(where, 2)}`);
     const stack = items.map(r => r.data?.stack).find(s => typeof s === 'string' && s);
-    if (stack) lines.push('```', stack.split('\n').slice(0, 8).join('\n'), '```');
+    if (stack) lines.push(...codeBlock(stack.split('\n').slice(0, 8).join('\n')));
     lines.push('');
   });
   if (sorted.length > MAX_GROUPS) lines.push(`(ほか ${sorted.length - MAX_GROUPS} 種類)`, '');
@@ -148,11 +174,15 @@ async function main() {
   };
 
   if (ack !== undefined) {
+    if (!/^\d+$/.test(ack)) throw new Error(`--ack には番号を渡してください (${JSON.stringify(ack)})`);
     const r = await call(url('/ack', { site, upto: ack }), { method: 'POST' });
     console.log(`${site}: ${r.notified} 番までを通知済みにしました`);
     return;
   }
   const r = await call(url('', all ? { site, since: 0 } : { site }));
+  // last は GITHUB_OUTPUT を通って次のステップの --ack に渡るので、数でなければ止める
+  // (改行などが混じると、ほかの出力を書き足せてしまう)
+  if (!Number.isSafeInteger(r.last) || r.last < 0) throw new Error(`Worker の応答の last が番号ではない (${JSON.stringify(r.last)})`);
   // --all は通知済みの分も返すので、抜けを数えても意味が無い
   const dropped = all ? 0 : droppedCount(r);
   const { count, markdown } = summarize(r.records, dropped);
