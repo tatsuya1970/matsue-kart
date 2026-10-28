@@ -6,6 +6,17 @@ const notFound = () => new Response('<html>404</html>', { status: 404 });
 
 afterEach(() => vi.unstubAllGlobals());
 
+/** 再試行の待ち時間だけを記録する (時間切れ用の長いタイマーは除く)。タイマー自体は本物のまま */
+function recordWaits(timeoutMs = 60000): () => number[] {
+  const ms: number[] = [];
+  const real = globalThis.setTimeout;
+  vi.stubGlobal('setTimeout', ((fn: () => void, delay?: number) => {
+    if (delay !== undefined && delay < timeoutMs) ms.push(delay);
+    return real(fn, delay);
+  }) as unknown as typeof setTimeout);
+  return () => ms;
+}
+
 describe('fetchJson', () => {
   it('404 は例外にして、再試行で取れたら成功する', async () => {
     const f = vi.fn().mockResolvedValueOnce(notFound()).mockResolvedValueOnce(ok('{"a":1}'));
@@ -23,6 +34,30 @@ describe('fetchJson', () => {
     expect(err.status).toBe(404);
     // API が返す理由 (workers/turn/ の daily_cap など) を読めるよう、本文の先頭も持つ
     expect(err.body).toContain('404');
+  });
+
+  it('403 は間を空けて試し直し、通れば成功する', async () => {
+    const blocked = () => new Response('', { status: 403 });
+    const f = vi.fn().mockResolvedValueOnce(blocked()).mockResolvedValueOnce(ok('{"a":1}'));
+    vi.stubGlobal('fetch', f);
+    await expect(fetchJson('x.json', { backoffMs: 1, blockedBackoffMs: 1 })).resolves.toEqual({ a: 1 });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('403 の待ちは backoffMs ではなく blockedBackoffMs に従う', async () => {
+    const waits = recordWaits();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('', { status: 403 })));
+    await fetchJson('x.json', { backoffMs: 1, blockedBackoffMs: 40 }).catch(() => {});
+    expect(waits()).toHaveLength(2);
+    // ±25% ばらすので下限だけ見る
+    for (const ms of waits()) expect(ms).toBeGreaterThanOrEqual(30);
+  });
+
+  it('404 は従来どおり短い間隔で試し直す', async () => {
+    const waits = recordWaits();
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => notFound()));
+    await fetchJson('x.json', { backoffMs: 10 }).catch(() => {});
+    expect(waits()).toEqual([10, 20]);
   });
 
   it('応答が来なければ時間切れにする', async () => {
