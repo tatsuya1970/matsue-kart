@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Worker は JavaScript (型定義なし)。vitest は型を検査しないのでそのまま読める
-import worker, { DailyCounter, FAIL_TTL_SEC, ICE_TTL_SEC } from '../workers/turn/worker.js';
+import worker, { DailyCounter } from '../workers/turn/worker.js';
+
+// worker.js の ICE_TTL_SEC / FAIL_TTL_SEC と同じ値 (Worker の入口からは数を export できない)
+const ICE_TTL_SEC = 3600;
+const FAIL_TTL_SEC = 30;
 
 /** Durable Object の storage の代わり (DailyCounter が使う get / put の形だけ) */
 class FakeStorage {
@@ -14,11 +18,16 @@ class FakeStorage {
 }
 
 const TURN = [{ urls: 'stun:stun.example:3478' }, { urls: 'turn:turn.example:3478', username: 'u', credential: 'c' }];
+const TURN2 = [{ urls: 'turn:turn2.example:3478', username: 'u2', credential: 'c2' }];
 const ENV = { TURN_API_URL: 'https://example.metered.live/api/v1/turn/credentials?apiKey=k1' };
+/** secret を入れ替えた後の設定 */
+const ENV2 = { TURN_API_URL: 'https://example.metered.live/api/v1/turn/credentials?apiKey=k2' };
 
 const newCounter = (env: Record<string, string> = ENV, storage = new FakeStorage()) => new DailyCounter({ storage }, env);
 const ice = (c: any, limit = 500) => c.fetch(new Request('https://counter/ice', { method: 'POST', body: JSON.stringify({ limit }) })).then((r: Response) => r.json());
 const status = (c: any) => c.fetch(new Request('https://counter/status')).then((r: Response) => r.json());
+/** 裏で上流を呼んでいる分が終わるまで待つ */
+const idle = (c: any) => vi.waitFor(() => expect(c.pending).toBeNull());
 
 let upstream: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -41,11 +50,33 @@ describe('TURN の資格情報の保存と 1 日の上限 (DailyCounter)', () =>
     await ice(c);
     expect(upstream).toHaveBeenCalledTimes(1);
     expect(await status(c)).toMatchObject({ day: '2026-10-28', count: 1 });
-    // 古くなったら聞き直し、そのときだけ数える
+    // 古くなったら保存分を待たせずに返し、裏で聞き直す (そのときだけ数える)。次の要求から新しい方
+    upstream.mockImplementation(async () => Response.json(TURN2));
     vi.setSystemTime(Date.now() + 2000);
-    await ice(c);
+    expect(await ice(c)).toEqual({ ok: true, iceServers: TURN });
+    await idle(c);
     expect(upstream).toHaveBeenCalledTimes(2);
     expect((await status(c)).count).toBe(2);
+    expect(await ice(c)).toEqual({ ok: true, iceServers: TURN2 });
+  });
+
+  it('上流が落ちていても古い保存分を配り続け、取り直しは FAIL_TTL_SEC おき', async () => {
+    const c = newCounter();
+    await ice(c);
+    upstream.mockImplementation(async () => new Response('down', { status: 500 }));
+    vi.setSystemTime(Date.now() + ICE_TTL_SEC * 1000);
+    expect(await ice(c)).toEqual({ ok: true, iceServers: TURN });
+    await idle(c);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(await ice(c)).toEqual({ ok: true, iceServers: TURN });   // 失敗の直後は上流を呼ばない
+    await idle(c);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    upstream.mockImplementation(async () => Response.json(TURN2));
+    vi.setSystemTime(Date.now() + FAIL_TTL_SEC * 1000);
+    expect(await ice(c)).toEqual({ ok: true, iceServers: TURN });
+    await idle(c);
+    expect(await ice(c)).toEqual({ ok: true, iceServers: TURN2 });
+    expect((await status(c)).count).toBe(2);   // 失敗した回は数えない
   });
 
   it('上流が失敗した回は数えず、FAIL_TTL_SEC のあいだは上流を呼ばずに同じ失敗を返す', async () => {
@@ -69,16 +100,21 @@ describe('TURN の資格情報の保存と 1 日の上限 (DailyCounter)', () =>
     expect(await ice(newCounter())).toMatchObject({ ok: false, message: 'upstream returned no turn: server' });
   });
 
-  it('上限に達したら上流を呼ばずに daily_cap。保存分が新しいあいだは配り続け、翌日は 0 から', async () => {
-    const c = newCounter();
+  it('上限に達しても保存分があれば配る。使える保存分が無ければ上流を呼ばずに daily_cap、翌日は 0 から', async () => {
+    const storage = new FakeStorage();
+    const c = newCounter(ENV, storage);
     expect((await ice(c, 1)).ok).toBe(true);
-    expect((await ice(c, 1)).ok).toBe(true);   // 保存分
     vi.setSystemTime(Date.now() + ICE_TTL_SEC * 1000);
-    expect(await ice(c, 1)).toEqual({ ok: false, error: 'daily_cap', count: 1 });
+    expect(await ice(c, 1)).toEqual({ ok: true, iceServers: TURN });   // 古い保存分
+    await idle(c);
+    expect(upstream).toHaveBeenCalledTimes(1);   // 上限なので取り直さない
+    // secret を入れ替えると、前の設定で取った保存分は配らない
+    const c2 = newCounter(ENV2, storage);
+    expect(await ice(c2, 1)).toEqual({ ok: false, error: 'daily_cap', count: 1 });
     expect(upstream).toHaveBeenCalledTimes(1);
     vi.setSystemTime(new Date('2026-10-28T15:00:00Z'));   // 日本時間の翌日 0 時
-    expect((await ice(c, 1)).ok).toBe(true);
-    expect(await status(c)).toMatchObject({ day: '2026-10-29', count: 1 });
+    expect((await ice(c2, 1)).ok).toBe(true);
+    expect(await status(c2)).toMatchObject({ day: '2026-10-29', count: 1 });
   });
 
   it('同時に来た要求は、上流を呼んでいる最中の 1 回に相乗りする', async () => {
@@ -99,14 +135,15 @@ describe('TURN の資格情報の保存と 1 日の上限 (DailyCounter)', () =>
     // デプロイや secret の入れ替えで Object が作り直される (storage は残る)
     await ice(newCounter(ENV, storage));
     expect(upstream).toHaveBeenCalledTimes(1);
-    await ice(newCounter({ TURN_API_URL: 'https://example.metered.live/api/v1/turn/credentials?apiKey=k2' }, storage));
+    await ice(newCounter(ENV2, storage));
     expect(upstream).toHaveBeenCalledTimes(2);
     expect(upstream.mock.calls[1][0]).toContain('apiKey=k2');
   });
 
   it('Worker の入口: 許可した Origin に配り、上限と上流の失敗は理由と CORS を付けて返す', async () => {
     vi.stubGlobal('caches', { default: { match: async () => undefined, put: async () => {} } });
-    const c = newCounter();
+    const storage = new FakeStorage();
+    let c = newCounter(ENV, storage);
     const env = {
       ...ENV, ALLOWED_ORIGINS: 'https://matsue.citykart.jp', DAILY_CAP: '1',
       DAILY_COUNTER: { idFromName: () => 'turn', get: () => ({ fetch: (u: string, init?: RequestInit) => c.fetch(new Request(u, init)) }) },
@@ -121,7 +158,14 @@ describe('TURN の資格情報の保存と 1 日の上限 (DailyCounter)', () =>
     expect(await res.json()).toEqual({ iceServers: TURN });
     expect(await (await get('', '/status')).json()).toMatchObject({ count: 1, cap: 1, cachedAt: '2026-10-28T03:00:00.000Z' });
 
+    // 上限に達していても、古い保存分は配る
     vi.setSystemTime(Date.now() + ICE_TTL_SEC * 1000);
+    res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ iceServers: TURN });
+    await idle(c);
+    // secret を入れ替えた直後 (使える保存分が無い) に上限に達していれば 503
+    c = newCounter(ENV2, storage);
     res = await get();
     expect(res.status).toBe(503);
     expect(res.headers.get('access-control-allow-origin')).toBe('https://matsue.citykart.jp');
@@ -139,6 +183,7 @@ describe('TURN の資格情報の保存と 1 日の上限 (DailyCounter)', () =>
     const c = newCounter();
     for (let i = 0; i < 3; i++) {
       expect((await ice(c, 0)).ok).toBe(true);
+      await idle(c);
       vi.setSystemTime(Date.now() + ICE_TTL_SEC * 1000);
     }
     expect((await status(c)).count).toBe(3);

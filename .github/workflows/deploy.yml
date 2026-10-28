@@ -84,7 +84,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
   smoke:
-    # 配信された版を外から確かめる。CDN に行き渡るまで最大 10 分待つ。
+    # 配信された版を外から確かめる。CDN に行き渡るまで最大 10 分待つ。ランキングの一覧が読めるかも見る。
     # TURN の 1 日の発行上限に達しているのは警告にとどめる (--allow-daily-cap。上限は定期監視が知らせる)
     needs: [build, deploy]
     runs-on: ubuntu-latest
@@ -96,4 +96,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node tools/check_site.mjs "${{ needs.deploy.outputs.page_url }}" --commit "${{ needs.build.outputs.commit }}" --wait 600 --allow-daily-cap
+      - run: node tools/check_site.mjs "${{ needs.deploy.outputs.page_url }}" --commit "${{ needs.build.outputs.commit }}" --wait 600 --allow-daily-cap --ranking "${{ vars.RANKING_URL }}"

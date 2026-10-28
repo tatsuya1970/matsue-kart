@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { atlasFile, type QualityPreset } from './quality';
 import { assetUrl } from './geo';
-import { fetchBuffer, fetchJson } from './fetch';
+import { FetchError, fetchBuffer, fetchJson } from './fetch';
 import { t } from './i18n';
 import { loadTexture } from './texture';
 
@@ -28,10 +28,11 @@ export async function loadLod2(preset: QualityPreset, onProgress?: (p: number, l
   const jobs = meta.groups.map(async g => {
     if (g.count === 0) return;
     const name = meta.atlases[g.atlas];
-    // 低画質時は 2048px 版を使う。未生成の環境では元の 4096px に戻す
+    // 低画質時は 2048px 版を使う。未生成の環境 (404) でだけ元の 4096px に戻す。通信の失敗や
+    // 時間切れで戻すと、低画質を選んだ端末に 4 倍の画像を読ませて GPU のメモリが尽きる
     const load = (f: string) => loadTexture(assetUrl(`data/${f}`));
     const tex = await load(atlasFile(name, preset)).catch(e => {
-      if (!preset.halfAtlas) throw e;
+      if (!preset.halfAtlas || !(e instanceof FetchError && e.status === 404)) throw e;
       console.warn(`${atlasFile(name, preset)} が無いので ${name} を使います (npm run data:lq で生成できます)`);
       return load(name);
     });

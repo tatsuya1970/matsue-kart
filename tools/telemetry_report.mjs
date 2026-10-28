@@ -8,7 +8,8 @@
 // 通知するのは kind が error (例外)・gl (WebGL のコンテキスト喪失) のものと、load のうち resource (読み込み失敗)。
 // 読み込み完了までの時間 (load ready)・対戦の記録 (net)・WebGL が使えない環境 (gl unavailable) は
 // 通知せず、末尾に件数だけ添える。
-// --out のとき、GITHUB_OUTPUT があれば count (通知するエラーの件数) と last (最後の記録の番号) を書く。
+// 通知する前に Worker の上限を超えて消えた記録があれば、その件数も Issue に書く (droppedCount)。
+// --out のとき、GITHUB_OUTPUT があれば count (通知するエラーと消えた記録の件数) と last (最後の記録の番号) を書く。
 // 定期監視 (.github/workflows/monitor.yml) は count が 0 でなければ Issue に足し、そのあと last で --ack する。
 // 記録の中身は workers/turn/worker.js の cleanTelemetry が整えたもの (種類・内容・ビルド・画質・言語・パス・UA)。
 
@@ -58,14 +59,42 @@ function show(pairs, n = 4) {
 }
 
 /**
- * 記録を「種類/event: message」ごとにまとめて Markdown にする。
- * 返り値: { count: 通知するエラーの件数, markdown: 本文 (エラーが無ければ '') }
+ * 通知する前に Worker の上限 (サイトごとに 1,000 件) を超えて消えた記録の件数。
+ * 番号は 1 ずつ増え、古いものから消えるので、通知済みの次から残っている最初の記録までの抜けを数える。
+ * r は Worker の GET /telemetry (since 無し) の応答 { last, notified, records }
  */
-export function summarize(records) {
+export function droppedCount(r) {
+  const first = r.records.length ? r.records[0].seq : r.last + 1;
+  return Math.max(0, first - (r.notified + 1));
+}
+
+/**
+ * 記録を「種類/event: message」ごとにまとめて Markdown にする。dropped は通知する前に消えた件数。
+ * 返り値: { count: 通知するエラーと消えた記録の件数, markdown: 本文 (どちらも無ければ '') }
+ */
+export function summarize(records, dropped = 0) {
   const errors = records.filter(isErrorRecord);
   const others = records.filter(r => !isErrorRecord(r));
-  if (!errors.length) return { count: 0, markdown: '' };
+  if (!errors.length && !dropped) return { count: 0, markdown: '' };
+  const lines = [];
+  if (dropped) {
+    lines.push(`通知する前に記録の上限 (サイトごとに 1,000 件) を超え、古い記録 ${dropped} 件が消えました。消えた分にエラーがあったかは分かりません。`, '');
+  }
+  if (errors.length) lines.push(...errorSection(errors));
 
+  const parts = [];
+  const ready = others.filter(r => r.kind === 'load' && r.event === 'ready').map(r => Number(r.data?.ms)).filter(Number.isFinite).sort((a, b) => a - b);
+  if (ready.length) parts.push(`読み込み完了 ${ready.length} 件 (中央値 ${(ready[Math.floor(ready.length / 2)] / 1000).toFixed(1)} 秒)`);
+  for (const [event, c] of tally(others.filter(r => r.kind === 'net').map(r => r.event))) parts.push(`net ${event} ${c} 件`);
+  const noGl = others.filter(r => r.kind === 'gl').length;
+  if (noGl) parts.push(`WebGL が使えない環境 ${noGl} 件`);
+  if (parts.length) lines.push(`同じ期間のほかの記録: ${parts.join('、')}`);
+
+  return { count: errors.length + dropped, markdown: lines.join('\n').trimEnd() + '\n' };
+}
+
+/** エラーを同じ内容ごとにまとめた節 (多い順) */
+function errorSection(errors) {
   const groups = new Map();
   for (const r of errors) {
     const message = String(r.data?.message ?? '').replace(/\s+/g, ' ').slice(0, 160);
@@ -91,16 +120,7 @@ export function summarize(records) {
     lines.push('');
   });
   if (sorted.length > MAX_GROUPS) lines.push(`(ほか ${sorted.length - MAX_GROUPS} 種類)`, '');
-
-  const parts = [];
-  const ready = others.filter(r => r.kind === 'load' && r.event === 'ready').map(r => Number(r.data?.ms)).filter(Number.isFinite).sort((a, b) => a - b);
-  if (ready.length) parts.push(`読み込み完了 ${ready.length} 件 (中央値 ${(ready[Math.floor(ready.length / 2)] / 1000).toFixed(1)} 秒)`);
-  for (const [event, c] of tally(others.filter(r => r.kind === 'net').map(r => r.event))) parts.push(`net ${event} ${c} 件`);
-  const noGl = others.filter(r => r.kind === 'gl').length;
-  if (noGl) parts.push(`WebGL が使えない環境 ${noGl} 件`);
-  if (parts.length) lines.push(`同じ期間のほかの記録: ${parts.join('、')}`);
-
-  return { count: errors.length, markdown: lines.join('\n').trimEnd() + '\n' };
+  return lines;
 }
 
 async function main() {
@@ -133,8 +153,10 @@ async function main() {
     return;
   }
   const r = await call(url('', all ? { site, since: 0 } : { site }));
-  const { count, markdown } = summarize(r.records);
-  console.log(`${site}: 記録 ${r.records.length} 件 (通知するエラー ${count} 件、最後の番号 ${r.last}、通知済み ${r.notified})`);
+  // --all は通知済みの分も返すので、抜けを数えても意味が無い
+  const dropped = all ? 0 : droppedCount(r);
+  const { count, markdown } = summarize(r.records, dropped);
+  console.log(`${site}: 記録 ${r.records.length} 件 (通知する件数 ${count}、うち消えた記録 ${dropped}、最後の番号 ${r.last}、通知済み ${r.notified})`);
   if (markdown) console.log(markdown);
   if (out) await writeFile(out, markdown);
   if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `count=${count}\nlast=${r.last}\n`);

@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 // Worker と tools/ は JavaScript (型定義なし)。vitest は型を検査しないのでそのまま読める
 import { TelemetryLog, cleanTelemetry, telemetryKey } from '../workers/turn/worker.js';
-import { browserOf, isErrorRecord, summarize } from '../tools/telemetry_report.mjs';
+import { browserOf, droppedCount, isErrorRecord, summarize } from '../tools/telemetry_report.mjs';
 
-/** Durable Object の storage の代わり (get / put / delete / list の使う範囲だけ) */
+/**
+ * Durable Object の storage の代わり (get / put / delete / list の使う範囲だけ)。
+ * 本物と同じく、読み書きした値は写しにする (同じ物を共有すると、古い値を書き戻す競合が見えない)
+ */
 class FakeStorage {
   map = new Map<string, unknown>();
-  async get(key: string) { return this.map.get(key); }
-  async put(key: string, value: unknown) { this.map.set(key, value); }
+  async get(key: string) { const v = this.map.get(key); return v === undefined ? undefined : structuredClone(v); }
+  async put(key: string, value: unknown) { this.map.set(key, structuredClone(value)); }
   async delete(keys: string[]) { for (const k of keys) this.map.delete(k); }
   async list(opts: { prefix?: string; start?: string; limit?: number } = {}) {
     const keys = [...this.map.keys()].filter(k => k.startsWith(opts.prefix ?? '') && (opts.start === undefined || k >= opts.start)).sort();
@@ -19,6 +22,13 @@ const newLog = () => new TelemetryLog({ storage: new FakeStorage() });
 const add = (log: any, rec: unknown) => log.fetch(new Request('https://log/add', { method: 'POST', body: JSON.stringify(rec) })).then((r: Response) => r.json());
 const list = (log: any, since?: number) => log.fetch(new Request(`https://log/list${since === undefined ? '' : `?since=${since}`}`)).then((r: Response) => r.json());
 const ack = (log: any, upto: number) => log.fetch(new Request('https://log/ack', { method: 'POST', body: JSON.stringify({ upto }) })).then((r: Response) => r.json());
+
+/** 本文がゆっくり届く要求。release() を呼ぶまで json() が終わらない */
+function slowRequest(url: string, body: unknown) {
+  let release!: () => void;
+  const arrived = new Promise<void>(r => { release = r; });
+  return { request: { method: 'POST', url, json: () => arrived.then(() => body) }, release };
+}
 
 const uncaught = (message: string, extra: Record<string, unknown> = {}) => ({
   kind: 'error', event: 'uncaught', data: { message, stack: `${message}\n    at x (a.js:1:2)`, where: 'https://x/a.js:1:2' },
@@ -67,6 +77,27 @@ describe('本番の記録 (Worker 側)', () => {
     expect(r.last).toBe(1001);
     expect(r.records).toHaveLength(1000);
     expect(r.records[0].seq).toBe(2);
+    // 通知する前に消えた 1 件は、番号の抜けから数える
+    expect(droppedCount(await list(log))).toBe(1);
+  });
+  it('本文の届くのが遅い要求があっても、同時に来た追加と通知済みの印が互いの書き込みを消さない', async () => {
+    const log = newLog();
+    await add(log, { kind: 'error', event: 'uncaught', data: { message: 'a' } });
+    // 通知済みの印の本文が届くまでのあいだに、ページからの追加が来る
+    const slowAck = slowRequest('https://log/ack', { upto: 1 });
+    const acking = log.fetch(slowAck.request);
+    await add(log, { kind: 'error', event: 'uncaught', data: { message: 'b' } });
+    slowAck.release();
+    await acking;
+    // 追加どうしでも同じ
+    const slowAdd = slowRequest('https://log/add', { kind: 'error', event: 'uncaught', data: { message: 'c' } });
+    const adding = log.fetch(slowAdd.request);
+    await add(log, { kind: 'error', event: 'uncaught', data: { message: 'd' } });
+    slowAdd.release();
+    await adding;
+    const r = await list(log, 0);
+    expect(r).toMatchObject({ last: 4, notified: 1 });
+    expect(r.records.map((x: any) => [x.seq, x.data.message])).toEqual([[1, 'a'], [2, 'b'], [3, 'd'], [4, 'c']]);
   });
 });
 
@@ -111,5 +142,18 @@ describe('本番の記録のまとめ (tools/telemetry_report.mjs)', () => {
   it('エラーが無ければ何も書かない', () => {
     expect(summarize([{ kind: 'load', event: 'ready', data: { ms: 1 } }])).toEqual({ count: 0, markdown: '' });
     expect(summarize([])).toEqual({ count: 0, markdown: '' });
+  });
+  it('通知する前に消えた記録があれば、エラーが無くても件数を書いて通知する', () => {
+    const { count, markdown } = summarize([{ kind: 'load', event: 'ready', data: { ms: 1000 } }], 7);
+    expect(count).toBe(7);
+    expect(markdown).toContain('古い記録 7 件が消えました');
+    expect(markdown).not.toContain('種類のエラー');
+    expect(summarize([uncaught('TypeError: x')], 2).count).toBe(3);
+  });
+  it('消えた件数は、通知済みの次から残っている最初の記録までの抜け', () => {
+    expect(droppedCount({ last: 10, notified: 3, records: [{ seq: 4 }] })).toBe(0);
+    expect(droppedCount({ last: 1010, notified: 3, records: [{ seq: 11 }] })).toBe(7);
+    expect(droppedCount({ last: 5, notified: 5, records: [] })).toBe(0);
+    expect(droppedCount({ last: 0, notified: 0, records: [] })).toBe(0);
   });
 });

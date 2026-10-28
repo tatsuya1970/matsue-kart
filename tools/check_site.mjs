@@ -5,6 +5,8 @@
 //   node tools/check_site.mjs https://matsue.citykart.jp/ --commit 61276fc --wait 600
 //        # そのコミットの版が配信されるまで最大 600 秒待つ (デプロイ直後の確認)
 //   node tools/check_site.mjs https://matsue.citykart.jp/ --relays    # 対戦のリレーも見る
+//   --ranking <URL>     ランキングの一覧 (Worker の /ranking) が読めるかも見る。空なら見ない。
+//                       登録はしない (本番の一覧に監視の記録が載ってしまうので)
 //   --allow-daily-cap   TURN の資格情報 API が 1 日の発行上限に達しているのは警告にとどめる
 //                       (デプロイの点検用。上限に達した日にも修正を配信できるように。定期監視では付けない)
 //
@@ -28,6 +30,7 @@ const expectCommit = opt('--commit');
 const waitSec = Number(opt('--wait') ?? 0);
 const checkRelays = args.includes('--relays');
 const allowDailyCap = args.includes('--allow-daily-cap');
+const rankingUrl = opt('--ranking');
 const remote = /^https?:\/\//.test(target);
 const base = remote ? target.replace(/\/?$/, '/') : path.resolve(target);
 
@@ -158,6 +161,21 @@ async function turnCheck() {
   return errors;
 }
 
+/** ランキングの一覧が読めるか。Worker はサイトの Origin からだけ許可するので、TURN と同じく Origin を名乗る */
+async function rankingCheck() {
+  try {
+    const origin = remote ? new URL(base).origin : originFromCname((await get('CNAME')).body.toString('utf8'));
+    const res = await fetch(rankingUrl, { signal: AbortSignal.timeout(10000), headers: apiHeaders(origin) });
+    if (!res.ok) return [`ランキング: HTTP ${res.status}`];
+    const r = await res.json();
+    if (!Array.isArray(r?.entries)) return ['ランキング: 一覧 (entries) が無い'];
+    console.log(`ランキング: ${r.entries.length} 件を読めた`);
+    return [];
+  } catch (e) {
+    return [`ランキング: ${e instanceof Error ? e.message : String(e)}`];
+  }
+}
+
 /** 対戦のシグナリングに使うリレー (trystero が appId から決める組) へつながるか */
 async function relayCheck() {
   const { getRelays } = await import('@trystero-p2p/core');
@@ -185,6 +203,7 @@ while (errors.length && Date.now() < deadline) {
   errors = await checkOnce();
 }
 errors.push(...await turnCheck());
+if (rankingUrl) errors.push(...await rankingCheck());
 if (checkRelays) errors.push(...await relayCheck());
 
 if (errors.length) {

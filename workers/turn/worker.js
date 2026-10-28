@@ -18,10 +18,14 @@
 //     切り替えるなら ttl を ICE_TTL_SEC より十分長くする)。
 //   - 1 日 (日本時間) に上流へ発行してもらう回数に上限を掛ける (DAILY_CAP)。数えるのは
 //     上流が正しく応答した回だけで、普段は 1 日 24 回ほど。保存が効かなくなったときの保険で、
-//     上限に達した日は 503 を返し、サイト側は TURN が取れないので対戦PLAY を出さない。翌日 0 時に戻る。
+//     上限に達しても保存分があればそれを配る。保存分が無いとき (secret の入れ替え直後など) は 503 を返し、
+//     サイト側は TURN が取れないので対戦PLAY を出さない。翌日 0 時に戻る。
 //     1 つの資格情報で有効期間のあいだに流せる量までは縛れない (それは上流の仕様)。費用の上限は
 //     上流のプランで決める: metered.ca の無料プランはカード登録が無く、枠を超えても請求は無い。
-//   - 上流が失敗したら、FAIL_TTL_SEC (30 秒) は上流を呼ばずに同じ失敗を返す (障害中に叩き続けない)。
+//   - 保存分が ICE_TTL_SEC より古くても、いまの設定で取ったものなら待たせずにそれを返し、裏で取り直す。
+//     上流が失敗しているあいだも保存分を配り続ける (資格情報は固定なので古くても使える)。
+//     利用者が上流の応答を待つのは、保存分が無いとき (初回と secret の入れ替え直後) だけになる。
+//   - 上流が失敗したら、FAIL_TTL_SEC (30 秒) は上流を呼ばない (障害中に叩き続けない)。保存分が無ければ同じ失敗を返す。
 //     いまの数と、応答を保存した時刻は GET /status で見られる (Origin 不要、秘密は出ない)。
 //
 // 使い方 (1 つの Worker を 3 サイトで共有する。上流は metered.ca の無料プラン):
@@ -41,10 +45,12 @@
 
 /** Worker の Cache API で応答を使い回す秒数 (独自ドメインに載せたときだけ効く。*.workers.dev では何もしない) */
 const CACHE_SEC = 60;
+// 下の 2 つは export しない。Workers の実行環境は、入口のモジュールが関数・クラス以外を export していると
+// 起動を拒む (wrangler dev の workerd で "Incorrect type for map entry")。tests/ は同じ値を自分で持つ
 /** 上流の応答を DailyCounter に保存して配り回す秒数 (同じ資格情報を配っても構わない) */
-export const ICE_TTL_SEC = 3600;
+const ICE_TTL_SEC = 3600;
 /** 上流が失敗したあと、上流を呼ばずに同じ失敗を返す秒数 */
-export const FAIL_TTL_SEC = 30;
+const FAIL_TTL_SEC = 30;
 
 /** ICE サーバーの一覧に turn: / turns: があるか (tools/turn_config.mjs と同じ判定) */
 function hasTurnServer(list) {
@@ -130,9 +136,10 @@ export async function fetchIceServers(env) {
  *                         / { ok: false, error: 'daily_cap', count } / { ok: false, error: 'upstream', message }
  *   GET  /status        → { day, count, cachedAt }
  * 保存した応答が ICE_TTL_SEC より新しく、いまの設定で取ったものなら、上流を呼ばずにそれを返す。
- * 古ければ上流を呼び、正しく応答したときだけ数を 1 増やす (上流の障害で上限を使い切らないように)。
- * 失敗したら FAIL_TTL_SEC のあいだは上流を呼ばずに同じ失敗を返す。上流を呼んでいる最中に
- * 来た要求は、その 1 回の結果に相乗りする (同時に何本も上流を呼ばない)。
+ * 古ければ保存分をそのまま返しつつ、裏で上流を呼んで取り直す。保存分が無ければ上流の応答を待つ。
+ * 上流が正しく応答したときだけ数を 1 増やす (上流の障害で上限を使い切らないように)。
+ * 失敗したら FAIL_TTL_SEC のあいだは上流を呼ばない (保存分が無ければ同じ失敗を返す)。上流を呼んでいる
+ * 最中に来た要求は、その 1 回の結果に相乗りする (同時に何本も上流を呼ばない)。
  * 名前は 1 日の回数だけを数えていたころのまま (変えるには Durable Object の移行が要る)。
  * cloudflare:workers の DurableObject を継承しない fetch 方式にしてあるのは、
  * Node でそのまま読み込んで動作確認できるようにするため (tools/ の検査と同じ流儀)。
@@ -163,9 +170,21 @@ export class DailyCounter {
     this.source ||= await iceSource(this.env);
     const now = Date.now();
     const cached = await this.storage.get('ice');
-    if (cached && cached.source === this.source && now - cached.at < ICE_TTL_SEC * 1000) return { ok: true, iceServers: cached.iceServers };
-    if (this.failure && now - this.failure.at < FAIL_TTL_SEC * 1000) return { ok: false, error: 'upstream', message: this.failure.message };
-    // ここから pending を立てるまで await を挟まない (挟むと同時に来た要求が上流を二重に呼ぶ)
+    const usable = cached && cached.source === this.source;
+    if (usable && now - cached.at < ICE_TTL_SEC * 1000) return { ok: true, iceServers: cached.iceServers };
+    const failing = this.failure && now - this.failure.at < FAIL_TTL_SEC * 1000;
+    if (usable) {
+      // 古いが、いまの設定で取ったもの。待たせずに返し、裏で取り直す (結果は次の要求から)。
+      // 失敗は refresh が this.failure に残すので、ここでは捨てる
+      if (!failing) void this.refreshOnce(limit).catch(() => {});
+      return { ok: true, iceServers: cached.iceServers };
+    }
+    if (failing) return { ok: false, error: 'upstream', message: this.failure.message };
+    return this.refreshOnce(limit);
+  }
+  /** 上流を呼んでいる最中なら、その 1 回に相乗りする */
+  refreshOnce(limit) {
+    // pending を立てるまで await を挟まない (挟むと同時に来た要求が上流を二重に呼ぶ)
     this.pending ??= this.refresh(limit).finally(() => { this.pending = null; });
     return this.pending;
   }
@@ -209,8 +228,10 @@ import { isNgName } from './ngwords.js';
 // 速い順に RANK_KEEP 件だけ残す。サイトは Origin のホスト名の先頭で決める
 // (matsue.citykart.jp → matsue)。ページ側から送るのは名前とタイムだけ。
 //   GET    /ranking            → { entries: 上位 RANK_SHOW 件 }
-//   POST   /ranking {name,time} → { id, rank (RANK_KEEP 位までに入らなければ null), entries }
+//   POST   /ranking {name,time,run} → { id, rank (RANK_KEEP 位までに入らなければ null), entries }
+//          run はページがレースごとに作る ID。同じ run の再送 (応答が届かず押し直した) は保存せず、前の結果を返す
 //   DELETE /ranking?site=&id=  → 管理用 (Authorization: Bearer <ADMIN_TOKEN>)。不適切な名前や不正な記録を消す
+//   POST   /ranking/restore?site=&at=  → 管理用。その時刻の状態に戻す (過去 30 日。下の handleRankingRestore)
 // 守れること / 守れないこと: カートの物理はブラウザで計算しているので、タイムの正しさは
 // サーバーで確かめられない。改造したページや curl から速いタイムを送ることはできる。
 // ここでできるのは、ありえない速さ (MIN_TIME) の拒否、回数制限、名前の整形、管理用の削除まで。
@@ -249,38 +270,65 @@ export function cleanTime(site, v) {
   return Math.round(t * 100) / 100;
 }
 
+/** ページが送る run (レースごとの ID) の形。違えば無いものとして扱う (重複の判定をしないだけ) */
+export function cleanRun(v) {
+  return typeof v === 'string' && /^[0-9a-f-]{16,64}$/i.test(v) ? v.toLowerCase() : undefined;
+}
+
+/** 返す一覧。run は返さない (他人の run を知っても害は無いが、見せる理由も無い) */
+const shown = list => list.slice(0, RANK_SHOW).map(({ run, ...e }) => e);
+
 /**
  * サイトごとのランキング。上位 RANK_KEEP 件を 1 つの配列として保存する (件数が少ないので十分)。
  * DailyCounter と同じく fetch 方式にして、Node でもそのまま動作確認できるようにしてある。
- *   GET  /top              → { entries }
- *   POST /add { name, time } → { id, rank, entries }
- *   POST /delete { id }    → { ok }
+ *   GET  /top                     → { entries }
+ *   POST /add { name, time, run } → { id, rank, entries }
+ *   POST /delete { id }           → { ok }
+ *   POST /restore { at | bookmark } → { target, undo }  次に起動したときに、その時点の状態に戻す
+ *   POST /abort                   → いまのインスタンスを終わらせる (/restore の後に呼ぶ)
  */
 export class Leaderboard {
   constructor(state) {
+    this.state = state;
     this.storage = state.storage;
   }
   async fetch(request) {
     const url = new URL(request.url);
+    // 本文はストレージを読む前に読み切る (DailyCounter と同じ)。読んでから書くまでにストレージ以外の
+    // await を挟むと、同時に来た登録が同じ一覧を読み、後から書いた方が先の登録を消す
+    const body = request.method === 'POST' ? await request.json() : null;
+    if (request.method === 'POST' && url.pathname === '/restore') {
+      // Durable Object の PITR (SQLite 方式で使える。過去 30 日)。戻すのは次に起動したとき
+      const target = body.bookmark || await this.storage.getBookmarkForTime(body.at);
+      const undo = await this.storage.onNextSessionRestoreBookmark(target);
+      return Response.json({ target, undo });
+    }
+    if (request.method === 'POST' && url.pathname === '/abort') {
+      this.state.abort('restore');
+      return Response.json({ ok: true });
+    }
     const list = (await this.storage.get('top')) ?? [];
     if (request.method === 'POST' && url.pathname === '/add') {
-      const { name, time } = await request.json();
-      const entry = { id: crypto.randomUUID(), name, time, at: Date.now() };
+      const { name, time, run } = body;
+      // 同じレースの再送なら保存せずに前の結果を返す (保存した後で応答だけ失われ、押し直したとき)。
+      // 前の記録が RANK_KEEP 位から落ちていれば見つからないが、同じタイムなのでまた圏外になる
+      const prev = run ? list.findIndex(e => e.run === run) : -1;
+      if (prev >= 0) return Response.json({ id: list[prev].id, rank: prev + 1, entries: shown(list) });
+      const entry = { id: crypto.randomUUID(), name, time, at: Date.now(), ...(run ? { run } : {}) };
       // 同じタイムなら先に出した人が上
       let i = list.findIndex(e => e.time > time);
       if (i < 0) i = list.length;
       list.splice(i, 0, entry);
       const kept = list.slice(0, RANK_KEEP);
       await this.storage.put('top', kept);
-      return Response.json({ id: entry.id, rank: i < RANK_KEEP ? i + 1 : null, entries: kept.slice(0, RANK_SHOW) });
+      return Response.json({ id: entry.id, rank: i < RANK_KEEP ? i + 1 : null, entries: shown(kept) });
     }
     if (request.method === 'POST' && url.pathname === '/delete') {
-      const { id } = await request.json();
-      const kept = list.filter(e => e.id !== id);
+      const kept = list.filter(e => e.id !== body.id);
       await this.storage.put('top', kept);
       return Response.json({ ok: kept.length !== list.length });
     }
-    return Response.json({ entries: list.slice(0, RANK_SHOW) });
+    return Response.json({ entries: shown(list) });
   }
 }
 
@@ -314,7 +362,8 @@ async function handleRanking(request, env, origin, fail) {
   // 使えない言葉 (ngwords.js)。ページ側も同じ判定で先に止めるが、改造したページからも保存させない
   if (isNgName(name)) return fail(400, 'ng_name');
   if (time === null) return fail(400, 'time out of range');
-  const res = await board(env, site).fetch('https://board/add', { method: 'POST', body: JSON.stringify({ name, time }) });
+  const run = cleanRun(body?.run);
+  const res = await board(env, site).fetch('https://board/add', { method: 'POST', body: JSON.stringify({ name, time, run }) });
   return withCors(new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }), origin);
 }
 
@@ -333,7 +382,10 @@ async function handleRanking(request, env, origin, fail) {
 // 守れること / 守れないこと: 送り主はブラウザなので中身は偽れる。ここでできるのは Origin の確認、
 // 回数制限、大きさと項目の制限まで。名前や peer ID はページ側が送らない。
 
-/** サイトごとに残す件数 (古いものから消す) */
+/**
+ * サイトごとに残す件数 (古いものから消す)。未通知のものも消える。番号は 1 ずつ増えるので、
+ * 消えた件数は tools/telemetry_report.mjs が番号の抜けから数えて Issue に書く
+ */
 const TELEMETRY_KEEP = 1000;
 const TELEMETRY_KINDS = ['error', 'load', 'net', 'gl'];
 /** 1 件の本文の上限 (文字)。これより長ければ受け付けない */
@@ -387,9 +439,12 @@ export class TelemetryLog {
   }
   async fetch(request) {
     const url = new URL(request.url);
+    // 本文はストレージを読む前に読み切る (Leaderboard と同じ)。挟むと、同時に来た追加や通知済みの印が
+    // 古い meta を書き戻し、番号が戻って次の記録が既存の記録を上書きする
+    const body = request.method === 'POST' ? await request.json() : null;
     const meta = (await this.storage.get('meta')) ?? { last: 0, notified: 0, count: 0 };
     if (request.method === 'POST' && url.pathname === '/add') {
-      const rec = await request.json();
+      const rec = body;
       const seq = meta.last + 1;
       await this.storage.put(telemetryKey(seq), { seq, t: Date.now(), ...rec });
       meta.last = seq;
@@ -403,7 +458,7 @@ export class TelemetryLog {
       return Response.json({ seq });
     }
     if (request.method === 'POST' && url.pathname === '/ack') {
-      const { upto } = await request.json();
+      const { upto } = body;
       meta.notified = Math.max(meta.notified, Math.min(Number(upto) || 0, meta.last));
       await this.storage.put('meta', meta);
       return Response.json({ notified: meta.notified });
@@ -477,6 +532,63 @@ async function handleRankingDelete(request, env) {
   return new Response(res.body, { headers: { 'content-type': 'application/json' } });
 }
 
+/** Durable Object の PITR で戻せる期間 */
+const RESTORE_DAYS = 30;
+
+/**
+ * 時刻の文字列をミリ秒にする。時差の無いもの ("2026-10-28 12:00") は日本時間として読む。
+ * 数字だけならミリ秒のまま。読めなければ NaN
+ */
+export function parseJstTime(v) {
+  const s = String(v ?? '').trim().replace(' ', 'T');
+  if (/^\d+$/.test(s)) return Number(s);
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(s)) return NaN;
+  return Date.parse(/(Z|[+-]\d\d:?\d\d)$/i.test(s) ? s : `${s}+09:00`);
+}
+
+/**
+ * 管理用: ランキングをある時刻の状態に戻す。ADMIN_TOKEN が要る。
+ *   POST /ranking/restore?site=matsue&at=2026-10-28 12:00   (時差が無ければ日本時間)
+ *   POST /ranking/restore?site=matsue&bookmark=<undo>       (戻したのを取り消す)
+ * → { site, restoredTo, undo, entries }。entries は戻した後の上位 RANK_SHOW 件で、違っていれば
+ * undo の bookmark でもう一度呼べば戻す前に戻る。Durable Object の PITR (SQLite 方式、過去 30 日) を使う。
+ * 戻した時刻より後の登録は消える。手元の wrangler dev では PITR が無いので試せない
+ */
+async function handleRankingRestore(request, env) {
+  const auth = request.headers.get('Authorization') ?? '';
+  if (!env.ADMIN_TOKEN || auth !== `Bearer ${env.ADMIN_TOKEN}`) return text(403, 'forbidden');
+  if (!env.LEADERBOARD) return text(503, 'ranking is not configured');
+  if (request.method !== 'POST') return text(405, 'method not allowed');
+  const url = new URL(request.url);
+  const site = url.searchParams.get('site') ?? '';
+  if (!/^[a-z]+$/.test(site)) return text(400, 'site required');
+  const bookmark = url.searchParams.get('bookmark') ?? '';
+  const at = parseJstTime(url.searchParams.get('at'));
+  if (!bookmark) {
+    if (!Number.isFinite(at)) return text(400, 'at (e.g. 2026-10-28 12:00, JST) or bookmark required');
+    if (at > Date.now() || at < Date.now() - RESTORE_DAYS * 86400 * 1000) return text(400, `at must be within the last ${RESTORE_DAYS} days`);
+  }
+  let r;
+  try {
+    const res = await board(env, site).fetch('https://board/restore', { method: 'POST', body: JSON.stringify(bookmark ? { bookmark } : { at }) });
+    r = await res.json();
+  } catch (e) {
+    return text(502, `restore failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  // 戻るのは次に起動したとき。いまのインスタンスを終わらせる (終わらせた要求は失敗として返ってくる)
+  await board(env, site).fetch('https://board/abort', { method: 'POST', body: '{}' }).catch(() => {});
+  // 起動し直した後の一覧で、戻ったかを確かめられるようにする (abort した stub は使えないので取り直す)
+  let entries = null;
+  for (let i = 0; i < 3 && !entries; i++) {
+    try {
+      entries = (await (await board(env, site).fetch('https://board/top')).json()).entries;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  return Response.json({ site, restoredTo: r.target, undo: r.undo, entries }, { headers: { 'cache-control': 'no-store' } });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
@@ -485,6 +597,7 @@ export default {
       return Response.json(await dailyStatus(env), { headers: { 'cache-control': 'no-store' } });
     }
     if (request.method === 'DELETE' && path === '/ranking') return handleRankingDelete(request, env);
+    if (path === '/ranking/restore') return handleRankingRestore(request, env);
     // 記録の読み出しと通知済みの印 (定期監視から。Origin 不要、TELEMETRY_TOKEN が要る)
     if ((request.method === 'GET' && path === '/telemetry') || path === '/telemetry/ack') return handleTelemetryAdmin(request, env);
     const origin = request.headers.get('Origin') ?? '';

@@ -1,8 +1,8 @@
 name: Monitor production
 
 # 本番の外形監視と、利用者のブラウザで起きたエラーの通知。3 時間おきに:
-#   1. 配信物が揃っているか・TURN の設定 API が応えるか・対戦のシグナリングに使う nostr リレーに
-#      つながるかを見る (tools/check_site.mjs)。失敗すると Issue「本番の外形監視が失敗しています」を
+#   1. 配信物が揃っているか・TURN の設定 API が応えるか・ランキングの一覧が読めるか・対戦の
+#      シグナリングに使う nostr リレーにつながるかを見る (tools/check_site.mjs)。失敗すると Issue「本番の外形監視が失敗しています」を
 #      作り (開いていればコメントを足し)、通るようになったら「復旧」とコメントして閉じる。
 #      ジョブ自体も失敗にするので、Actions の失敗通知も別に届く
 #   2. ページの src/telemetry.ts が Worker (workers/turn/) に送った例外・読み込み失敗をまとめ、
@@ -53,7 +53,10 @@ jobs:
         # 本番が応答しないまま待ち続けても、ここで打ち切って失敗として通知へ進む
         timeout-minutes: 15
         shell: bash
-        run: node tools/check_site.mjs "$SITE_URL" --relays 2>&1 | tee site.log
+        run: node tools/check_site.mjs "$SITE_URL" --relays --ranking "$RANKING_URL" 2>&1 | tee site.log
+        env:
+          # ランキングの一覧が読めるかも見る (登録はしない)。変数が無ければ見ない
+          RANKING_URL: ${{ vars.RANKING_URL }}
 
       - name: Collect browser errors
         id: telemetry

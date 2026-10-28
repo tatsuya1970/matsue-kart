@@ -203,7 +203,7 @@ trystero 0.25 は同じ appId なら部屋をまたいで WebRTC 接続を共有
 
 中継は [metered.ca](https://www.metered.ca/stun-turn) の無料プラン（月 500 MB、上りと下りの合計）を使います。カード登録が無いので枠を超えても請求は発生せず、費用の上限がはっきりします（枠を超えたときに中継が止まるかどうかは公式には明記されていません）。代わりに、枠が尽きた月は直結できない組（携帯回線どうしなど）が翌月まで対戦できないと考えてください。中継 1 組の 5 分レースが 4〜8 MB なので、月に 60〜120 組ぶんです。使用量は metered.ca のダッシュボードで見られます。
 
-登録してアプリを作り、TURN Server の画面で資格情報（credential）を 1 つ作ると、その行の「Show API Key」に資格情報用の API キーが出ます。ドメイン（`<アプリ名>.metered.live`）は左メニューの Developers にあります。`https://<アプリ名>.metered.live/api/v1/turn/credentials?apiKey=<資格情報の API キー>` が資格情報を返す URL です。Developers にある Secret key はアカウント全体の鍵なので、この URL には使いません。この URL が鍵そのものなので `turn.json` には書かず、`workers/turn/` の Cloudflare Worker に持たせます。資格情報は既定では期限切れにならないので、漏れたと思ったらダッシュボードで無効化して作り直し、Worker の secret を入れ替えます（Worker が保存している応答は設定と組にしてあるので、入れ替えた次の要求から新しい資格情報を配ります）。Worker はサイトの Origin からの GET だけを受け、1 つの IP からの回数を制限し、metered.ca の応答を 1 時間保存して配り回します（`worker.js` の `DailyCounter`。資格情報は固定なので毎回聞いても同じものが返るだけで、上流を呼ぶのは 1 時間に 1 回ほどになります）。上流が失敗したら 30 秒は上流を呼ばずに同じ失敗を返します（`worker.js` の冒頭に、守れることと守れないことを書いてあります）。松江・広島・福山で 1 つを共有し、どのリポジトリからデプロイしても同じ Worker が更新されます。
+登録してアプリを作り、TURN Server の画面で資格情報（credential）を 1 つ作ると、その行の「Show API Key」に資格情報用の API キーが出ます。ドメイン（`<アプリ名>.metered.live`）は左メニューの Developers にあります。`https://<アプリ名>.metered.live/api/v1/turn/credentials?apiKey=<資格情報の API キー>` が資格情報を返す URL です。Developers にある Secret key はアカウント全体の鍵なので、この URL には使いません。この URL が鍵そのものなので `turn.json` には書かず、`workers/turn/` の Cloudflare Worker に持たせます。資格情報は既定では期限切れにならないので、漏れたと思ったらダッシュボードで無効化して作り直し、Worker の secret を入れ替えます（Worker が保存している応答は設定と組にしてあるので、入れ替えた次の要求から新しい資格情報を配ります）。Worker はサイトの Origin からの GET だけを受け、1 つの IP からの回数を制限し、metered.ca の応答を 1 時間保存して配り回します（`worker.js` の `DailyCounter`。資格情報は固定なので毎回聞いても同じものが返るだけで、上流を呼ぶのは 1 時間に 1 回ほどになります）。1 時間を過ぎた保存分も、待たせずにそれを返してから裏で取り直すので、利用者が上流の応答を待つのは保存分が無いとき（初回と secret の入れ替え直後）だけです。上流が失敗しているあいだも保存分を配り続け（資格情報は固定なので古くても使えます）、取り直しは 30 秒おきにします。保存分が無いときに失敗すれば、30 秒は上流を呼ばずに同じ失敗を返します（`worker.js` の冒頭に、守れることと守れないことを書いてあります）。松江・広島・福山で 1 つを共有し、どのリポジトリからデプロイしても同じ Worker が更新されます。
 
 1. metered.ca でアプリと資格情報を 1 つ作り、資格情報の API キーで上の URL を組み立てます。`curl` で開いて `turn:` を含む JSON が返れば正しい URL です。
 2. Worker に secret を入れてデプロイします。
@@ -217,7 +217,7 @@ trystero 0.25 は同じ appId なら部屋をまたいで WebRTC 接続を共有
 
 3. 表示された Worker の URL を、松江・広島・福山それぞれの repository variable `TURN_CONFIG_URL` に同じ値で設定します。
 
-1 日に発行する回数の上限は `wrangler.toml` の `DAILY_CAP`（既定 500、日本時間の日付で数える）です。達した日は Worker が 503 と `{ "error": "daily_cap" }` を返し、ページ側は対戦PLAY を出さず、その下に「今日は対戦はできません。午前 0 時にリセットします」と出します（`src/net.ts` の `turnState`、`src/main.ts` の `updateOnlineAvailability`）。資格情報 API がそれ以外の理由で応答しないときは「中継サーバーの設定を取得できないため、いまは対戦できません」と出します。定期監視（`monitor.yml`）も同じ API を呼ぶので、止まっている間は監視が失敗して GitHub から通知が届きます。翌日 0 時に戻ります。数えるのは上流（metered.ca）が正しく応答した回だけで、応答は 1 時間保存して配り回すので、普段は 1 日 24 回ほどです。誰かが Worker を叩き続けても、上流の障害が続いても、上限は減りません。上限は保存が効かなくなったときの保険です。いまの数と応答を保存した時刻（`cachedAt`）は `https://<Worker の URL>/status` で見られます。転送量そのものの上限は metered.ca のプランで決まります。数と応答は Durable Object（`worker.js` の `DailyCounter`）が持っており、無料プランで使える SQLite 方式にしてあります。上限に達していても、デプロイ（`npm run turn:prepare` と配信後の確認）は警告を出して先へ進みます。止めると、上限に達した日に修正を配信できなくなるためです。
+1 日に発行する回数の上限は `wrangler.toml` の `DAILY_CAP`（既定 500、日本時間の日付で数える）です。上限に達しても、保存してある応答があれば Worker はそれを配り続けます。使える保存分が無いとき（secret を入れ替えた直後など）に達していると、Worker は 503 と `{ "error": "daily_cap" }` を返し、ページ側は対戦PLAY を出さず、その下に「今日は対戦はできません。午前 0 時にリセットします」と出します（`src/net.ts` の `turnState`、`src/main.ts` の `updateOnlineAvailability`）。資格情報 API がそれ以外の理由で応答しないときは「中継サーバーの設定を取得できないため、いまは対戦できません」と出します。定期監視（`monitor.yml`）も同じ API を呼ぶので、止まっている間は監視が失敗して GitHub から通知が届きます。翌日 0 時に戻ります。数えるのは上流（metered.ca）が正しく応答した回だけで、応答は 1 時間保存して配り回すので、普段は 1 日 24 回ほどです。誰かが Worker を叩き続けても、上流の障害が続いても、上限は減りません。上限は保存が効かなくなったときの保険です。いまの数と応答を保存した時刻（`cachedAt`）は `https://<Worker の URL>/status` で見られます。転送量そのものの上限は metered.ca のプランで決まります。数と応答は Durable Object（`worker.js` の `DailyCounter`）が持っており、無料プランで使える SQLite 方式にしてあります。上限に達していても、デプロイ（`npm run turn:prepare` と配信後の確認）は警告を出して先へ進みます。止めると、上限に達した日に修正を配信できなくなるためです。
 
 `npm run turn:prepare` と `tools/check_site.mjs` は `public/CNAME` のドメインを Origin として名乗って Worker を呼ぶので、CI と定期監視からも検査できます。Worker を `*.workers.dev` のまま使うと Cache API は効きませんが、上流の応答は `DailyCounter` が保存しているので、上流を呼ぶ回数は変わりません（独自ドメインに載せると、`DailyCounter` を呼ぶ回数も Cache API で 1 分に 1 回まで減ります）。
 
@@ -292,15 +292,15 @@ npm run dev             # http://localhost:5182/
 2. **ビルド**
 3. **配信物の点検**（`npm run check:dist` = `tools/check_site.mjs dist`）。index.html から読む JS があるか、地形・LOD2・天守の `.bin` が `.json` の頂点数と同じ長さか、アトラスとテクスチャが揃っているかを見ます。欠けていれば配信しません。
 4. **配信**
-5. **配信後の確認**（`smoke` ジョブ）。本番の URL を同じ点検にかけ、バンドルに埋め込んだコミットがいま配信されている版と一致するまで最大 10 分待ちます。
+5. **配信後の確認**（`smoke` ジョブ）。本番の URL を同じ点検にかけ、バンドルに埋め込んだコミットがいま配信されている版と一致するまで最大 10 分待ちます。ランキングの一覧が読めるかも見ます。
 
 **切り戻し。** GitHub の Actions → Deploy to GitHub Pages → Run workflow で、`ref` に戻したいコミットの SHA（かタグ）を入れて実行すると、その版を配信し直します。次に `main` へ push すると `main` の先頭が配信されるので、原因を直すまでは `git revert` で `main` 自体を戻しておくのが確実です。
 
-**外形監視と通知。** `.github/workflows/monitor.yml` が 3 時間おきに本番を点検し、対戦のシグナリングに使う nostr リレー 8 つのうち 3 つ以上につながるかも見ます（`node tools/check_site.mjs https://matsue.citykart.jp/ --relays` で手元でも実行できます）。本番のトップ画面をブラウザで開くと利用者の「対戦待ち」表示に監視が映ってしまうので、HTTP とリレーの口だけを見ています。失敗すると Issue「本番の外形監視が失敗しています」を作って（開いていればコメントを足して）知らせ、通るようになったら「復旧」とコメントして閉じます（`tools/alert_issue.mjs`）。Worker が落ちて利用者のエラーの記録が取れないときも、この Issue は作ります（記録の取得に失敗しても先へ進み、最後にジョブを失敗にする）。Issue は持ち主を担当者にして @メンションするので、リポジトリを Watch していなくてもメールが届きます。ジョブ自体も失敗にするので、Actions の失敗通知も別に届きます。リポジトリに 60 日動きが無いと GitHub は定期実行を止めるので、実行のたびに自分を有効化し直して時計を戻しています。
+**外形監視と通知。** `.github/workflows/monitor.yml` が 3 時間おきに本番を点検し、ランキングの一覧が読めるか（登録はしません。本番の一覧に監視の記録が載ってしまうので）と、対戦のシグナリングに使う nostr リレー 8 つのうち 3 つ以上につながるかも見ます（`node tools/check_site.mjs https://matsue.citykart.jp/ --relays --ranking <RANKING_URL>` で手元でも実行できます）。本番のトップ画面をブラウザで開くと利用者の「対戦待ち」表示に監視が映ってしまうので、HTTP とリレーの口だけを見ています。失敗すると Issue「本番の外形監視が失敗しています」を作って（開いていればコメントを足して）知らせ、通るようになったら「復旧」とコメントして閉じます（`tools/alert_issue.mjs`）。Worker が落ちて利用者のエラーの記録が取れないときも、この Issue は作ります（記録の取得に失敗しても先へ進み、最後にジョブを失敗にする）。Issue は持ち主を担当者にして @メンションするので、リポジトリを Watch していなくてもメールが届きます。ジョブ自体も失敗にするので、Actions の失敗通知も別に届きます。リポジトリに 60 日動きが無いと GitHub は定期実行を止めるので、実行のたびに自分を有効化し直して時計を戻しています。
 
-**本番で起きたことの記録と通知。** 捕まえ損ねた例外、読み込みの失敗、WebGL のコンテキスト喪失、読み込み完了までの時間、presence で誰かとつながるまでの時間、対戦の発走人数を `src/telemetry.ts` が記録します。ゲーム本体の JS そのものが読めない・古いブラウザで構文エラーになる・評価の途中で落ちるときは、`src/telemetry.ts` も動かないので、`index.html` の先頭にある小さなスクリプト（起動の見張り、ES5）が代わりに「ゲームを起動できませんでした。押すと読み込み直します」を出し、`error/boot` として同じ送り先へ記録を送ります。本体は動き出したら `window.__booted` を立て、見張りはそれが立たないまま 30 秒過ぎると（JS がまだ届いていないだけなら最大 2 分まで待って）知らせます。送り先はリポジトリ変数 `TELEMETRY_URL`（ビルド時に `VITE_TELEMETRY_URL` として埋め込む。値は TURN と同じ Worker の URL に `/telemetry` を付けたもの）で、未設定なら送らずにページ内に残すだけです（コンソールで `__telemetry()`）。Worker（`workers/turn/` の `TelemetryLog`）はサイトごとに新しい 1,000 件を残し、定期監視が 3 時間おきに未通知の記録を読み出して（`tools/telemetry_report.mjs`。リポジトリの secret `TELEMETRY_TOKEN` を Worker の secret と同じ値にしておく）、例外・読み込み失敗・WebGL の喪失があれば同じ内容ごとにまとめて Issue「利用者のブラウザでエラーが起きています」に足します。この Issue は直したら手で閉じてください。読み込み時間や対戦の記録は通知せず、件数だけ添えます。送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送りません。残っている記録を手元で全部見るには `TELEMETRY_URL=… TELEMETRY_TOKEN=… node tools/telemetry_report.mjs --site matsue --all` です。
+**本番で起きたことの記録と通知。** 捕まえ損ねた例外、読み込みの失敗、WebGL のコンテキスト喪失、読み込み完了までの時間、presence で誰かとつながるまでの時間、対戦の発走人数を `src/telemetry.ts` が記録します。ゲーム本体の JS そのものが読めない・古いブラウザで構文エラーになる・評価の途中で落ちるときは、`src/telemetry.ts` も動かないので、`index.html` の先頭にある小さなスクリプト（起動の見張り、ES5）が代わりに「ゲームを起動できませんでした。押すと読み込み直します」を出し、`error/boot` として同じ送り先へ記録を送ります。本体は動き出したら `window.__booted` を立て、見張りはそれが立たないまま 30 秒過ぎると（JS がまだ届いていないだけなら最大 2 分まで待って）知らせます。送り先はリポジトリ変数 `TELEMETRY_URL`（ビルド時に `VITE_TELEMETRY_URL` として埋め込む。値は TURN と同じ Worker の URL に `/telemetry` を付けたもの）で、未設定なら送らずにページ内に残すだけです（コンソールで `__telemetry()`）。Worker（`workers/turn/` の `TelemetryLog`）はサイトごとに新しい 1,000 件を残し（通知する前に 1,000 件を超えて消えた分があれば、番号の抜けから件数を数えて Issue に書きます）、定期監視が 3 時間おきに未通知の記録を読み出して（`tools/telemetry_report.mjs`。リポジトリの secret `TELEMETRY_TOKEN` を Worker の secret と同じ値にしておく）、例外・読み込み失敗・WebGL の喪失があれば同じ内容ごとにまとめて Issue「利用者のブラウザでエラーが起きています」に足します。この Issue は直したら手で閉じてください。読み込み時間や対戦の記録は通知せず、件数だけ添えます。送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送りません。残っている記録を手元で全部見るには `TELEMETRY_URL=… TELEMETRY_TOKEN=… node tools/telemetry_report.mjs --site matsue --all` です。
 
-**ランキング。** ゴールするとリザルト画面に上位 10 件が出て、名前を入れて自分のタイムを登録できます（`src/ranking.ts`）。記録は TURN と同じ Worker（`workers/turn/` の `Leaderboard`）がサイトごとに上位 100 件を保存します。送り先はリポジトリ変数 `RANKING_URL`（ビルド時に `VITE_RANKING_URL`、値は Worker の URL に `/ranking` を付けたもの）で、未設定ならランキングは出ません。タイムはブラウザで計算しているので、改造すれば速いタイムを送れます。Worker はありえない速さ（コースの全長 ÷ 100 m/s より速いもの）を拒否し、回数を制限するだけです。不適切な名前や不正な記録は、管理用の合言葉（`npx wrangler secret put ADMIN_TOKEN` で設定）を付けて消します。
+**ランキング。** ゴールするとリザルト画面に上位 10 件が出て、名前を入れて自分のタイムを登録できます（`src/ranking.ts`）。記録は TURN と同じ Worker（`workers/turn/` の `Leaderboard`）がサイトごとに上位 100 件を保存します。送り先はリポジトリ変数 `RANKING_URL`（ビルド時に `VITE_RANKING_URL`、値は Worker の URL に `/ranking` を付けたもの）で、未設定ならランキングは出ません。タイムはブラウザで計算しているので、改造すれば速いタイムを送れます。Worker はありえない速さ（コースの全長 ÷ 100 m/s より速いもの）を拒否し、回数を制限するだけです。応答が届かずに「登録できませんでした」と出て押し直しても、二重には登録されません（ページがレースごとに ID を作って再送でも同じものを送り、Worker は同じ ID の再送を保存せずに前の結果を返す）。不適切な名前や不正な記録は、管理用の合言葉（`npx wrangler secret put ADMIN_TOKEN` で設定）を付けて消します。
 
 使えない言葉を含む名前は「その名前は使えません」と出して登録させません（`workers/turn/ngwords.js`。ページと Worker が同じ一覧を使います）。全角・カタカナ・空白・よくある当て字はそろえてから比べますが、一覧は完全ではありません。すり抜けたものは下の方法で消してください。
 
@@ -309,6 +309,14 @@ curl -X DELETE -H "Authorization: Bearer <ADMIN_TOKEN>" "https://<Worker の URL
 ```
 
 記録の id は、サイトを開いた状態のブラウザのコンソールで `fetch('<RANKING_URL>').then(r => r.json())` を実行すると見られます。デバッグ用の URL（`?debug=1`、`?steps=`、`?ai=1` など）で走った記録は登録できません。
+
+**ランキングを戻す。** 誤って消した・不具合で壊れたときは、過去 30 日の好きな時刻の状態に戻せます。ランキングは Durable Object の SQLite 方式で保存しているので、Cloudflare が変更の履歴を持っています（PITR）。時刻は日本時間で書きます（URL では空白を `+` にする）。
+
+```sh
+curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" "https://<Worker の URL>/ranking/restore?site=matsue&at=2026-10-28+12:00"
+```
+
+戻した後の上位 20 件（`entries`）と `undo` が返ります。違っていたら `&bookmark=<undo の値>` を付けて（`at` の代わりに）もう一度呼ぶと、戻す前の状態に戻ります。戻した時刻より後の登録は消えます。手元の `wrangler dev` には PITR が無いので試せません。30 日より前には戻せず、外部へのバックアップも作っていません（公開リポジトリに置くと利用者の名前が公開されるため）。
 
 プロジェクトページはサブパス配信なので `base` が要ります。`vite preview` は `command` が `'serve'` 扱いになり、`command === 'build'` で分岐するとビルド成果物を root で配信してしまって検証にならないため、環境変数で渡しています。
 

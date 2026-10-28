@@ -67,8 +67,17 @@ export async function fetchTop(): Promise<RankEntry[]> {
   return Array.isArray(r.entries) ? r.entries : [];
 }
 
-export async function submitTime(name: string, time: number): Promise<SubmitResult> {
-  return await call({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, time }) }) as SubmitResult;
+/**
+ * レースごとの ID。登録に失敗と出て押し直したときも同じものを送る。応答だけが失われて
+ * Worker には保存済みだったとき、Worker はこれを見て二重に登録しない
+ */
+export function newRunId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function submitTime(name: string, time: number, run: string): Promise<SubmitResult> {
+  return await call({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, time, run }) }) as SubmitResult;
 }
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -134,6 +143,7 @@ export function showRanking(opts: { time: number; name: string; canSubmit: boole
   msg.textContent = opts.canSubmit ? t('rank.prompt', formatTime(opts.time)) : '';
   void fetchTop().then(e => renderList(e, null)).catch(() => { msg.textContent = t('rank.loadFailed'); });
 
+  const run = newRunId();
   let sent = false;
   const send = async () => {
     if (sent) return;
@@ -145,7 +155,7 @@ export function showRanking(opts: { time: number; name: string; canSubmit: boole
     button.disabled = true; input.disabled = true;
     msg.textContent = t('rank.sending');
     try {
-      const r = await submitTime(name, opts.time);
+      const r = await submitTime(name, opts.time, run);
       opts.onName(name);
       renderList(r.entries, r.id);
       form.style.display = 'none';
