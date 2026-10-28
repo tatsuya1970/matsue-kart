@@ -316,7 +316,7 @@ curl -X DELETE -H "Authorization: Bearer <ADMIN_TOKEN>" "https://<Worker の URL
 curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" "https://<Worker の URL>/ranking/restore?site=matsue&at=2026-10-28+12:00"
 ```
 
-戻した後の上位 20 件（`entries`）と `undo` が返ります。違っていたら `&bookmark=<undo の値>` を付けて（`at` の代わりに）もう一度呼ぶと、戻す前の状態に戻ります。戻した時刻より後の登録は消えます。手元の `wrangler dev` には PITR が無いので試せません。30 日より前には戻せず、外部へのバックアップも作っていません（公開リポジトリに置くと利用者の名前が公開されるため）。
+戻した後の上位 20 件（`entries`）と `undo` が返ります。違っていたら `&bookmark=<undo の値>` を付けて（`at` の代わりに）もう一度呼ぶと、戻す前の状態に戻ります。戻した時刻より後の登録は消えます。手元の `wrangler dev` には PITR が無いので試せません。書き込みが始まったばかりのランキングでは履歴がまだ無く、`restore failed: This database has no history.` で失敗することがあります（本番で、使っていないサイト名 `restoretest` に初めて書いた直後に起き、数分後には戻せました）。30 日より前には戻せず、外部へのバックアップも作っていません（公開リポジトリに置くと利用者の名前が公開されるため）。
 
 プロジェクトページはサブパス配信なので `base` が要ります。`vite preview` は `command` が `'serve'` 扱いになり、`command === 'build'` で分岐するとビルド成果物を root で配信してしまって検証にならないため、環境変数で渡しています。
 
