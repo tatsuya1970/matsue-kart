@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { TelemetryLog, cleanTelemetry, telemetryKey } from '../workers/turn/worker.js';
 import { browserOf, droppedCount, isErrorRecord, summarize } from '../tools/telemetry_report.mjs';
 import { redactText } from '../workers/turn/redact.js';
+import { isOwnScript } from '../src/telemetry';
 
 /**
  * Durable Object の storage の代わり (get / put / delete / list の使う範囲だけ)。
@@ -34,6 +35,26 @@ function slowRequest(url: string, body: unknown) {
 const uncaught = (message: string, extra: Record<string, unknown> = {}) => ({
   kind: 'error', event: 'uncaught', data: { message, stack: `${message}\n    at x (a.js:1:2)`, where: 'https://x/a.js:1:2' },
   at: 1200, build: 'abc1234', path: '/', ua: 'Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36', quality: 'high', lang: 'ja', t: 1_700_000_000_000, ...extra,
+});
+
+describe('本番の記録 (ページ側)', () => {
+  it('捕まえ損ねた例外は、このサイトのスクリプトのファイルで起きたものだけを送る', () => {
+    const page = 'https://matsue.citykart.jp/?lang=ja#x';
+    expect(isOwnScript('https://matsue.citykart.jp/assets/index-abc.js', page)).toBe(true);
+    expect(isOwnScript('https://matsue.citykart.jp/assets/index-abc.js?v=1', 'https://matsue.citykart.jp/en/')).toBe(true);
+    // スマホのウォレットのアプリ内ブラウザが差し込んだスクリプト (Issue #3: window.ethereum を触って落ちる)。
+    // 場所はページそのものになる。クエリやフラグメントが付いていても同じ
+    expect(isOwnScript('https://matsue.citykart.jp/', page)).toBe(false);
+    expect(isOwnScript('https://matsue.citykart.jp/?lang=ja', page)).toBe(false);
+    expect(isOwnScript('https://matsue.citykart.jp/en/', 'https://matsue.citykart.jp/en/')).toBe(false);
+    // 別オリジンのスクリプトの「Script error.」は場所が空
+    expect(isOwnScript('', page)).toBe(false);
+    expect(isOwnScript(undefined, page)).toBe(false);
+    // 拡張機能・ほかのサイト
+    expect(isOwnScript('chrome-extension://abcdef/inpage.js', page)).toBe(false);
+    expect(isOwnScript('safari-web-extension://1234/content.js', page)).toBe(false);
+    expect(isOwnScript('https://evil.example/assets/index-abc.js', page)).toBe(false);
+  });
 });
 
 describe('本番の記録 (Worker 側)', () => {

@@ -5,6 +5,8 @@
 // ページ内に直近の記録を残すだけ (window.__telemetry() で見られる)。
 // 送るのは種類・内容・ビルド・画質・言語・パス・UA だけで、名前や peer ID は送らない。
 // 内容の文に URL のクエリやメールアドレスが入っていれば伏せて送る (Worker も同じ処理をする)。
+// 捕まえ損ねた例外は、このサイトのスクリプトのファイルで起きたものだけを送る (isOwnScript。
+// アプリ内ブラウザや拡張機能が差し込んだスクリプトの例外で通知が飛ばないように)。
 
 // 伏せ方は Worker と同じものを使う (workers/turn/redact.js)
 import { redactText } from '../workers/turn/redact.js';
@@ -69,6 +71,25 @@ export function stripQuery(u: string): string {
   }
 }
 
+/**
+ * 捕まえ損ねた例外の場所 (ErrorEvent の filename) が、このサイトのスクリプトのファイルか。
+ * 違うものは直しようがない (ゲームの不具合ではない) ので送らない:
+ * - 空: 別のオリジンのスクリプトの例外は、ブラウザが中身を伏せて「Script error.」・場所無しにする
+ * - ページそのもの: スマホのアプリ内ブラウザ (暗号資産のウォレットなど) が差し込んだスクリプトの例外は、
+ *   場所がページの URL になる (window.ethereum を触って落ちる)。このページで動くインラインの
+ *   スクリプトは index.html の起動の見張りだけで、本体はすべて別ファイル (見張りも同じ判定をする)
+ * - ほかのオリジン・chrome-extension:// など: 拡張機能やほかのサイトのもの
+ */
+export function isOwnScript(filename: string | undefined, pageUrl: string): boolean {
+  try {
+    const file = new URL(filename ?? '');
+    const page = new URL(pageUrl);
+    return file.origin === page.origin && file.pathname !== page.pathname;
+  } catch {
+    return false;
+  }
+}
+
 const errorData = (e: unknown): Record<string, unknown> => {
   if (e instanceof Error) return { message: e.message.slice(0, 300), name: e.name, stack: (e.stack ?? '').slice(0, 1500) };
   return { message: String(e).slice(0, 300) };
@@ -88,6 +109,7 @@ export function installErrorHandlers(): void {
       report('load', 'resource', { message: stripQuery(String((target as HTMLScriptElement).src)) });
       return;
     }
+    if (!isOwnScript(e.filename, location.href)) return;
     report('error', 'uncaught', { ...errorData(e.error ?? e.message), where: `${e.filename}:${e.lineno}:${e.colno}` });
   }, true);
   addEventListener('unhandledrejection', e => reportError('unhandledrejection', e.reason));

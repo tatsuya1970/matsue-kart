@@ -41,11 +41,18 @@
         }
       }
       // 本体の JS が取れなかった (404・回線) / 本体が動き出す前に本体の中で例外が出た (構文エラーなど)。
-      // 拡張機能などほかの出どころの例外では騒がないよう、同じオリジンのファイルのものだけを見る
+      // 拡張機能などほかの出どころの例外では騒がないよう、同じオリジンのファイルのものだけを見る。
+      // ページそのもの (この HTML) も除く。スマホのアプリ内ブラウザ (暗号資産のウォレットなど) が差し込んだ
+      // スクリプトの例外は、場所がこのページの URL になる (window.ethereum を触って落ちる)。
+      // このページで動くインラインのスクリプトはこの見張りだけで、本体はすべて別ファイル (src/telemetry.ts の isOwnScript と同じ判定)
+      function ownFile(f) {
+        f = String(f || '').replace(/[?#].*$/, '');
+        return f.indexOf(location.origin + '/') === 0 && f !== location.href.replace(/[?#].*$/, '');
+      }
       addEventListener('error', function (e) {
         var t = e.target;
         if (t && t.tagName === 'SCRIPT') { if (t.type === 'module') failed('script load: ' + String(t.src).replace(/[?#].*$/, '')); return; }
-        if (e.filename && e.filename.indexOf(location.origin + '/') === 0) failed('error: ' + String(e.message || '').slice(0, 300));
+        if (ownFile(e.filename)) failed('error: ' + String(e.message || '').slice(0, 300));
       }, true);
       // module に対応していないブラウザは本体を読みもしない
       if (!('noModule' in document.createElement('script'))) failed('module unsupported');

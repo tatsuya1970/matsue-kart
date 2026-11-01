@@ -115,4 +115,27 @@ describe('テレメトリ', () => {
       vi.unstubAllEnvs();
     }
   });
+  it('捕まえ損ねた例外は、このサイトのスクリプトのファイルで起きたものだけを送る (installErrorHandlers)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_TELEMETRY_URL', 'https://t.example/telemetry');
+    vi.stubGlobal('location', new URL('https://matsue.citykart.jp/'));
+    vi.stubGlobal('window', {});
+    const handlers = new Map<string, (e: unknown) => void>();
+    vi.stubGlobal('addEventListener', (type: string, fn: (e: unknown) => void) => handlers.set(type, fn));
+    const sent: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_u: string, init: RequestInit) => { sent.push(String(init.body)); return new Response(null, { status: 204 }); }));
+    try {
+      const { installErrorHandlers } = await import('../src/telemetry');
+      installErrorHandlers();
+      const fire = (filename: string, message: string) => handlers.get('error')!({ target: null, filename, message, lineno: 1, colno: 16 });
+      fire('https://matsue.citykart.jp/', "TypeError: undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')");
+      fire('', 'Script error.');
+      expect(sent).toHaveLength(0);
+      fire('https://matsue.citykart.jp/assets/index-abc.js', 'TypeError: x');
+      expect(sent).toHaveLength(1);
+      expect(JSON.parse(sent[0])).toMatchObject({ kind: 'error', event: 'uncaught', data: { message: 'TypeError: x', where: 'https://matsue.citykart.jp/assets/index-abc.js:1:16' } });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
