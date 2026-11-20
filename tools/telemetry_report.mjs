@@ -5,8 +5,8 @@
 //   node tools/telemetry_report.mjs --site hiroshima --all                # 残っている記録を全部まとめて表示 (手元で見るとき)
 //
 // 環境変数: TELEMETRY_URL (Worker の /telemetry。ページが送る先と同じ)、TELEMETRY_TOKEN (Worker の secret と同じ値)
-// 通知するのは kind が error (例外)・gl (WebGL のコンテキスト喪失) のものと、load のうち resource (読み込み失敗)。
-// 読み込み完了までの時間 (load ready)・対戦の記録 (net)・WebGL が使えない環境 (gl unavailable) は
+// 通知するのは kind が error (例外)・gl (WebGL のコンテキスト喪失。裏に回している間のものは除く) のものと、load のうち resource (読み込み失敗)。
+// 読み込み完了までの時間 (load ready)・対戦の記録 (net)・裏での WebGL の喪失・WebGL が使えない環境 (gl unavailable) は
 // 通知せず、末尾に件数だけ添える。
 // 通知する前に Worker の上限を超えて消えた記録があれば、その件数も Issue に書く (droppedCount)。
 // --out のとき、GITHUB_OUTPUT があれば count (通知するエラー・管理用の口の操作・消えた記録の件数) と last (最後の記録の番号) を書く。
@@ -24,10 +24,19 @@ import { redactText } from '../workers/turn/redact.js';
 const MAX_GROUPS = 20;
 
 /**
- * 通知の対象か (例外・読み込み失敗・WebGL の喪失)。
+ * 裏に回している間の WebGL の喪失か (src/telemetry.ts の glLossSituation が 'background' を付ける)。
+ * スマホは裏のタブの GPU を OS が取り上げるので、不具合ではない
+ */
+export function isBackgroundGlLoss(r) {
+  return r.kind === 'gl' && r.event === 'contextlost' && r.data?.message === 'background';
+}
+
+/**
+ * 通知の対象か (例外・読み込み失敗・表で起きた WebGL の喪失)。
  * WebGL がそもそも作れない (gl/unavailable) のは利用者の環境のせいで直しようがないので通知しない
  */
 export function isErrorRecord(r) {
+  if (isBackgroundGlLoss(r)) return false;
   return r.kind === 'error' || (r.kind === 'gl' && r.event !== 'unavailable') || (r.kind === 'load' && r.event === 'resource');
 }
 
@@ -112,8 +121,10 @@ export function summarize(records, dropped = 0) {
   const ready = others.filter(r => r.kind === 'load' && r.event === 'ready').map(r => Number(r.data?.ms)).filter(Number.isFinite).sort((a, b) => a - b);
   if (ready.length) parts.push(`読み込み完了 ${ready.length} 件 (中央値 ${(ready[Math.floor(ready.length / 2)] / 1000).toFixed(1)} 秒)`);
   for (const [event, c] of tally(others.filter(r => r.kind === 'net').map(r => r.event))) parts.push(`net ${code(event, 60)} ${c} 件`);
-  const noGl = others.filter(r => r.kind === 'gl').length;
-  if (noGl) parts.push(`WebGL が使えない環境 ${noGl} 件`);
+  const bgLoss = others.filter(isBackgroundGlLoss).length;
+  if (bgLoss) parts.push(`裏に回している間の WebGL の喪失 ${bgLoss} 件`);
+  const noGl = others.filter(r => r.kind === 'gl' && r.event === 'unavailable');
+  if (noGl.length) parts.push(`WebGL が使えない環境 ${noGl.length} 件 (${glUnavailableDetail(noGl)})`);
   if (parts.length) lines.push(`同じ期間のほかの記録: ${parts.join('、')}`);
 
   return { count: errors.length + dropped + admin.length, markdown: lines.join('\n').trimEnd() + '\n' };
@@ -158,6 +169,7 @@ function errorSection(errors) {
     lines.push(`- パス: ${show(tally(items.map(r => r.path ?? '?')))}`);
     // browserOf は決まった名前しか返さないので、コードにしない
     lines.push(`- ブラウザ: ${show(tally(items.map(r => browserOf(r.ua))), 4, String)}`);
+    if (items[0].kind === 'gl') lines.push(...glHints(items));
     const where = tally(items.map(r => r.data?.where).filter(Boolean));
     if (where.length) lines.push(`- 場所: ${show(where, 2)}`);
     const stack = items.map(r => r.data?.stack).find(s => typeof s === 'string' && s);
@@ -166,6 +178,31 @@ function errorSection(errors) {
   });
   if (sorted.length > MAX_GROUPS) lines.push(`(ほか ${sorted.length - MAX_GROUPS} 種類)`, '');
   return lines;
+}
+
+/** WebGL の喪失の記録 (同じ内容のまとまり) に添える原因の手がかり。無ければ空 */
+function glHints(items) {
+  const hints = [];
+  // 開いてから何秒で起きたか (読み込み直後ならテクスチャのメモリ不足が濃い)
+  const at = items.map(r => Number(r.at)).filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+  if (at.length) hints.push(`開いてから 中央値 ${(at[Math.floor(at.length / 2)] / 1000).toFixed(0)} 秒`);
+  const mem = tally(items.map(r => r.data?.mem).filter(Number.isFinite).map(n => `${n}GB`));
+  if (mem.length) hints.push(`端末のメモリ: ${show(mem)}`);
+  return hints.length ? [`- 状況: ${hints.join(' / ')}`] : [];
+}
+
+/**
+ * WebGL が使えない環境 (src/main.ts の createRenderer) の内訳。ブラウザが添えた理由と、
+ * WebGL1 なら作れたか (作れたなら端末かブラウザが WebGL2 だけを止めている)・WebGL2 の API が
+ * 無いか (無ければブラウザが古い)。真偽値でないもの (改造したページから) は数えない
+ */
+function glUnavailableDetail(items) {
+  const parts = [`理由: ${show(tally(items.map(r => String(r.data?.message ?? ''))), 3)}`];
+  const gl1 = items.filter(r => r.data?.webgl1 === true).length;
+  if (gl1) parts.push(`WebGL1 なら作れた ${gl1} 件`);
+  const noApi = items.filter(r => r.data?.webgl2Api === false).length;
+  if (noApi) parts.push(`WebGL2 の API が無い ${noApi} 件`);
+  return parts.join(' / ');
 }
 
 async function main() {

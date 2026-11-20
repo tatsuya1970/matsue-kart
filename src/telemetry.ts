@@ -90,6 +90,21 @@ export function isOwnScript(filename: string | undefined, pageUrl: string): bool
   }
 }
 
+/** 表に戻ってからこの時間のうちの喪失は、裏にいた間のものとみなす (裏では通知が遅れて届く) */
+const BACKGROUND_GRACE_MS = 3000;
+
+/**
+ * WebGL のコンテキストが失われたときの状況を「background」「visible/loading」「visible/ready」にする。
+ * スマホは裏に回したタブの GPU を OS が取り上げるので、裏での喪失は不具合ではない (通知しない。
+ * tools/telemetry_report.mjs の isErrorRecord)。表で起きたものは、読み込み中 (テクスチャを上げている
+ * 最中のメモリ不足) か、走っている最中かで原因が違うので分ける。
+ * msSinceShown は最後に表に戻ってからのミリ秒 (一度も裏に回っていなければ Infinity)
+ */
+export function glLossSituation(hidden: boolean, msSinceShown: number, ready: boolean): string {
+  if (hidden || msSinceShown < BACKGROUND_GRACE_MS) return 'background';
+  return ready ? 'visible/ready' : 'visible/loading';
+}
+
 const errorData = (e: unknown): Record<string, unknown> => {
   if (e instanceof Error) return { message: e.message.slice(0, 300), name: e.name, stack: (e.stack ?? '').slice(0, 1500) };
   return { message: String(e).slice(0, 300) };

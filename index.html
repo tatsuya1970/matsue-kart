@@ -278,8 +278,11 @@
     #tBrake { right: 122px; bottom: 22px; width: 64px; height: 64px; font-size: 22px; }
     #tItem { right: 32px; bottom: 128px; width: 64px; height: 64px; font-size: 26px; }
     .keys.touchKeys { display: none; }
-    /* WebGL のコンテキストが失われたときの案内 (src/main.ts の watchContextLoss) */
+    /* WebGL を作れない・失ったときの案内 (src/main.ts の showGlBox) */
     #glLost { position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 16px; background: rgba(5,10,20,.94); color: #fff; font-size: 17px; text-align: center; }
+    #glLostMsg { max-width: 36em; }
+    #glLostMsg p { margin: 0; }
+    #glLostMsg ul { margin: 12px 0 0; padding-left: 1.3em; text-align: left; font-size: 15px; line-height: 1.6; }
     #glLost button { font-size: 18px; font-weight: 800; padding: 10px 32px; border: 0; border-radius: 10px; background: #ffd83d; color: #111; cursor: pointer; }
     /* 通信の許可と、外部に伝わる情報の説明 (src/main.ts の startNet) */
     #netPrivacy { margin-top: 10px; font-size: 12px; line-height: 1.55; opacity: .72; }
